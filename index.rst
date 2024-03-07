@@ -1,0 +1,71 @@
+.. _about:
+
+About MultiSelectComboBox
+=================================
+
+Welcome to the documentation for MultiSelectComboBox, a PyQt6 widget that allows users to select multiple items from a dropdown list.
+
+.. toctree::
+   :maxdepth: 1
+   :hidden:
+
+   pages/methodes
+
+   :caption: Contents:
+
+   introduction
+   installation
+   usage_examples
+   api_reference
+   contributing
+
+Introduction
+------------
+
+The MultiSelectComboBox is a versatile widget that combines the functionality of a standard combobox with the ability to select multiple items at once. It provides a user-friendly interface for selecting multiple options from a list of choices.
+
+Installation
+------------
+
+To use the MultiSelectComboBox widget in your PyQt6 application, you'll need to install the PyQt6 library if you haven't already done so. You can install PyQt6 using pip:
+
+.. code-block:: bash
+
+   pip install pyqt6-multiselect-combobox
+
+
+Usage Examples
+--------
+Using the MultiSelectComboBox widget is straightforward. Simply create an instance of the `MultiSelectComboBox` class and add it to your PyQt6 application's layout. You can then populate the combobox with items using the `addItems` method and retrieve the selected items using the `selectedItems` method.
+
+Here's a simple example demonstrating how to use the MultiSelectComboBox widget:
+
+.. code-block:: python
+
+   from PyQt6.QtWidgets import QApplication, QVBoxLayout, QWidget
+   from pyqt6_multiselect_combobox import MultiSelectComboBox
+
+   app = QApplication([])
+
+   widget = QWidget()
+   layout = QVBoxLayout()
+   widget.setLayout(layout)
+
+   combo_box = MultiSelectComboBox()
+   combo_box.addItems(['Option 1', 'Option 2', 'Option 3'])
+   layout.addWidget(combo_box)
+
+   widget.show()
+   app.exec()
+
+API Reference
+-------------
+
+For detailed information about the available methods and properties of the MultiSelectComboBox widget, refer to the API Reference section of the documentation.
+
+Contributing
+------------
+
+If you'd like to contribute to the development of the MultiSelectComboBox widget or report any issues you encounter, please visit the GitHub repository at `pyqt6-multiselect-combobox <https://github.com/user0706/pyqt6-multiselect-combobox>`__.
+
+Feel free to explore the rest of the documentation for more information on using and customizing the MultiSelectComboBox widget in your PyQt6 applications.
