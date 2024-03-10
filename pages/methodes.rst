@@ -1,4 +1,4 @@
-MultiSelectComboBox Class
+Methods
 =========================
 
 This class defines a custom combo box widget that enables multi-select functionality. Users can select multiple items from a dropdown list, which are then displayed in a comma-separated format in the combo box's line edit area.
