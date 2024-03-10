@@ -18,7 +18,7 @@ class MultiSelectComboBox(QComboBox):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-
+        
         self.setEditable(True)
         self.lineEdit().setReadOnly(True)
 
@@ -180,7 +180,12 @@ class MultiSelectComboBox(QComboBox):
         delimiter = self.getDisplayDelimiter()
         texts = [self.typeSelection(i, display_type) for i in range(self.model(
         ).rowCount()) if self.model().item(i).checkState() == Qt.CheckState.Checked]
-        text = delimiter.join(texts)
+        
+        if texts:
+            text = delimiter.join(texts)
+        else:
+            text = self.placeholderText if hasattr(self, 'placeholderText') else ""
+        
         metrics = QFontMetrics(self.lineEdit().font())
         elidedText = metrics.elidedText(
             text, Qt.TextElideMode.ElideRight, self.lineEdit().width()
@@ -222,3 +227,79 @@ class MultiSelectComboBox(QComboBox):
         """
         output_type = self.getOutputType()
         return [self.typeSelection(i, output_type) for i in range(self.model().rowCount()) if self.model().item(i).checkState() == Qt.CheckState.Checked]
+
+    def setCurrentIndexes(self, indexes: list) -> None:
+        """Set the selected items based on the provided indexes.
+
+        Args:
+            indexes (list): A list of indexes to select.
+        """
+        for i in range(self.model().rowCount()):
+            self.model().item(i).setCheckState(
+                Qt.CheckState.Checked if i in indexes else Qt.CheckState.Unchecked
+            )
+        self.updateText()
+
+    def getCurrentIndexes(self) -> list:
+        """Get the indexes of the currently selected items.
+
+        Returns:
+            list: A list of indexes of selected items.
+        """
+        return [i for i in range(self.model().rowCount()) if self.model().item(i).checkState() == Qt.CheckState.Checked]
+
+    def setPlaceholderText(self, text: str) -> None:
+        """Set the placeholder text for the combo box.
+
+        Args:
+            text (str): The placeholder text.
+        """
+        self.placeholderText = text
+        self.updateText()
+
+    def showEvent(self, event) -> None:
+        """Show event handler.
+
+        Args:
+            event: The show event.
+        """
+        super().showEvent(event)
+        self.updateText()
+    
+    def getCurrentOptions(self):
+        """Get the currently selected options along with their associated data.
+
+        Returns:
+            list: A list of tuples containing the text and data of the currently selected options.
+                Each tuple consists of (text, data).
+        """
+        res = []
+        for i in range(self.model().rowCount()):
+            if self.model().item(i).checkState() == Qt.CheckState.Checked:
+                res.append((self.model().item(i).text(),
+                            self.model().item(i).data()))
+        return res
+    
+    def getPlaceholderText(self):
+        """Get the placeholder text currently set for the combo box.
+
+        Returns:
+            str: The placeholder text.
+        """
+        return self.placeholderText
+    
+    def setDuplicatesEnabled(self, enabled: bool) -> None:
+        """Set whether duplicates are allowed in the combo box.
+
+        Args:
+            enabled (bool): Whether duplicates are allowed.
+        """
+        self.duplicatesEnabled = enabled
+
+    def isDuplicatesEnabled(self) -> bool:
+        """Check if duplicates are allowed in the combo box.
+
+        Returns:
+            bool: True if duplicates are allowed, False otherwise.
+        """
+        return self.duplicatesEnabled
