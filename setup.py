@@ -6,7 +6,7 @@ with open('README.md', 'r', encoding='utf-8') as fh:
 
 setup(
     name='pyqt6-multiselect-combobox',
-    version='1.1.0',
+    version='1.1.1',
     description='A custom PyQt6 widget providing a multi-select combobox functionality for PyQt6 applications.',
     long_description=long_description,
     long_description_content_type='text/markdown',
