@@ -1,6 +1,8 @@
+from typing import Any, Iterable, List, Optional, Tuple
+
 from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate
 from PyQt6.QtGui import QStandardItem, QPalette, QFontMetrics
-from PyQt6.QtCore import Qt, QEvent, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QObject, QTimerEvent
 
 
 class MultiSelectComboBox(QComboBox):
@@ -38,6 +40,10 @@ class MultiSelectComboBox(QComboBox):
         self._inBulkUpdate = False
         self._selectAllEnabled = False
         self._selectAllText = "Select All"
+
+        # Output data role used when reading item data (e.g., for currentData())
+        # Defaults to Qt.ItemDataRole.UserRole to align with Qt idioms.
+        self._outputDataRole: Qt.ItemDataRole = Qt.ItemDataRole.UserRole
 
         self.setEditable(True)
         self.lineEdit().setReadOnly(True)
@@ -143,7 +149,7 @@ class MultiSelectComboBox(QComboBox):
         self.updateText()
         super().resizeEvent(event)
 
-    def eventFilter(self, obj, event) -> bool:
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         """Event filter to handle mouse button release events.
 
         Args:
@@ -238,7 +244,7 @@ class MultiSelectComboBox(QComboBox):
         except Exception:
             pass
 
-    def timerEvent(self, event) -> None:
+    def timerEvent(self, event: QTimerEvent) -> None:
         """Timer event handler.
 
         Args:
@@ -247,8 +253,8 @@ class MultiSelectComboBox(QComboBox):
         self.killTimer(event.timerId())
         self.closeOnLineEditClick = False
 
-    def typeSelection(self, index: int, type_variable: str, expected_type: str = "data") -> str:
-        """Get the selected item's data or text based on type.
+    def typeSelection(self, index: int, type_variable: str, expected_type: str = "data") -> Any:
+        """Get the selected item's data (for the configured role) or text.
 
         Args:
             index (int): The index of the item.
@@ -256,10 +262,17 @@ class MultiSelectComboBox(QComboBox):
             expected_type (str): The expected type. Default is 'data'.
 
         Returns:
-            str: The selected item's data or text.
+            Any: The selected item's data (read using getOutputDataRole()) or the
+                item's text (str) depending on the requested type.
+        
+        Note:
+            When returning data, the value is read using the currently configured
+            output data role (see setOutputDataRole/getOutputDataRole). By default,
+            this is Qt.ItemDataRole.UserRole. This differs from Qt's display role
+            and aligns with QStandardItem.setData default role semantics.
         """
         if type_variable == expected_type:
-            return self.model().item(index).data()
+            return self.model().item(index).data(int(self._outputDataRole))
         return self.model().item(index).text()
 
     def updateText(self) -> None:
@@ -299,24 +312,29 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._updatingText = False
 
-    def addItem(self, text: str, data: str = None) -> None:
+    def addItem(self, text: str, data: Optional[Any] = None) -> None:
         """Add an item to the combo box.
 
         Args:
             text (str): The text to display.
-            data (str): The associated data. Default is None.
+            data (Optional[Any]): The associated data. Default is None.
         """
         # Enforce duplicates policy: when disabled, prevent adding an item
         # that duplicates by text OR by data (strictest interpretation).
         if not self.isDuplicatesEnabled():
             for i in range(self._firstOptionRow(), self.model().rowCount()):
                 existing = self.model().item(i)
-                if existing.text() == text or existing.data() == (data or text):
+                existing_default = existing.data()
+                existing_user = existing.data(int(Qt.ItemDataRole.UserRole))
+                if existing.text() == text or existing_default == (data or text) or existing_user == (data or text):
                     return
 
         item = QStandardItem()
         item.setText(text)
-        item.setData(data or text)
+        # Store provided data in both the default role and UserRole to maintain
+        # backward compatibility with item.data() and to align with Qt idioms.
+        item.setData(data or text)  # default role (matches previous behavior)
+        item.setData(data or text, int(Qt.ItemDataRole.UserRole))
         item.setFlags(
             Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
         )
@@ -324,23 +342,23 @@ class MultiSelectComboBox(QComboBox):
         self.model().appendRow(item)
         self._syncSelectAllState()
 
-    def addItems(self, texts: list, dataList: list = None) -> None:
+    def addItems(self, texts: List[str], dataList: Optional[List[Optional[Any]]] = None) -> None:
         """Add multiple items to the combo box.
 
         Args:
-            texts (list): A list of texts to display.
-            dataList (list): A list of associated data. Default is None.
+            texts (List[str]): A list of texts to display.
+            dataList (Optional[List[Optional[Any]]]): A list of associated data. Default is None.
         """
         dataList = dataList or [None] * len(texts)
         for text, data in zip(texts, dataList):
             self.addItem(text, data)
         self._syncSelectAllState()
 
-    def currentData(self) -> list:
+    def currentData(self) -> List[Any]:
         """Get the currently selected data.
 
         Returns:
-            list: A list of currently selected data.
+            List[Any]: A list of currently selected data (read using getOutputDataRole()).
         """
         output_type = self.getOutputType()
         return [
@@ -349,11 +367,11 @@ class MultiSelectComboBox(QComboBox):
             if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
         ]
 
-    def setCurrentIndexes(self, indexes: list) -> None:
+    def setCurrentIndexes(self, indexes: List[int]) -> None:
         """Set the selected items based on the provided indexes.
 
         Args:
-            indexes (list): A list of indexes to select.
+            indexes (List[int]): A list of indexes to select.
         """
         self._beginBulkUpdate()
         try:
@@ -365,11 +383,11 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._endBulkUpdate()
 
-    def getCurrentIndexes(self) -> list:
+    def getCurrentIndexes(self) -> List[int]:
         """Get the indexes of the currently selected items.
 
         Returns:
-            list: A list of indexes of selected items.
+            List[int]: A list of indexes of selected items.
         """
         return [
             i
@@ -410,20 +428,20 @@ class MultiSelectComboBox(QComboBox):
         """Return whether the popup closes after selecting/toggling an item."""
         return self._closeOnSelect
 
-    def getCurrentOptions(self):
+    def getCurrentOptions(self) -> List[Tuple[str, Any]]:
         """Get the currently selected options along with their associated data.
 
         Returns:
-            list: A list of tuples containing the text and data of the currently selected options.
-                Each tuple consists of (text, data).
+            List[Tuple[str, Any]]: A list of tuples (text, data) for the currently
+                selected options. Data is read using getOutputDataRole().
         """
         res = []
         for i in range(self._firstOptionRow(), self.model().rowCount()):
             if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked:
-                res.append((self.model().item(i).text(), self.model().item(i).data()))
+                res.append((self.model().item(i).text(), self.model().item(i).data(int(self._outputDataRole))))
         return res
     
-    def getPlaceholderText(self):
+    def getPlaceholderText(self) -> str:
         """Get the placeholder text currently set for the combo box.
 
         Returns:
@@ -467,13 +485,14 @@ class MultiSelectComboBox(QComboBox):
             return delimiter.join(parts)
         return self.placeholderText if hasattr(self, 'placeholderText') else ""
 
-    def setCurrentText(self, value) -> None:  # type: ignore[override]
+    def setCurrentText(self, value: Iterable[str] | str) -> None:  # type: ignore[override]
         """Select items matching the provided value.
 
         Args:
-            value: Either a string joined by the current display delimiter or an
-                iterable of strings. Each entry is matched against item text;
-                if not found, it is compared to item data.
+            value (Iterable[str] | str): Either a string joined by the current
+                display delimiter or an iterable of strings. Each entry is matched
+                against item text; if not found, it is compared to item data
+                stored at Qt.UserRole.
 
         Returns:
             None
@@ -492,7 +511,7 @@ class MultiSelectComboBox(QComboBox):
         try:
             for i in range(self._firstOptionRow(), self.model().rowCount()):
                 item = self.model().item(i)
-                match = item.text() in to_select or str(item.data()) in to_select
+                match = item.text() in to_select or str(item.data(int(Qt.ItemDataRole.UserRole))) in to_select
                 item.setData(
                     Qt.CheckState.Checked if match else Qt.CheckState.Unchecked,
                     Qt.ItemDataRole.CheckStateRole,
@@ -518,20 +537,19 @@ class MultiSelectComboBox(QComboBox):
                 return i
         return -1
 
-    def findData(self, data, role: int = int(Qt.ItemDataRole.UserRole)) -> int:  # helper similar to QComboBox
+    def findData(self, data: Any, role: int = int(Qt.ItemDataRole.UserRole)) -> int:  # helper similar to QComboBox
         """Find the index of the first item whose data matches the given value.
 
         Args:
-            data: The data value to search for.
-            role (int): Data role (kept for API parity; currently not used and
-                defaults to Qt.UserRole). Included for compatibility.
+            data (Any): The data value to search for.
+            role (int): Data role to use for comparison (defaults to Qt.UserRole).
 
         Returns:
             int: The index of the first matching item, or -1 if not found. If the
                 optional "Select All" item is enabled, indices include that row.
         """
         for i in range(self._firstOptionRow(), self.model().rowCount()):
-            if self.model().item(i).data() == data:
+            if self.model().item(i).data(role) == data:
                 return i
         return -1
 
@@ -678,3 +696,22 @@ class MultiSelectComboBox(QComboBox):
             return patt_cmp in item_cmp
         # Default to exact match
         return item_cmp == patt_cmp
+
+    # --- Configurable output data role ---
+    def setOutputDataRole(self, role: Qt.ItemDataRole) -> None:
+        """Set the Qt data role used when reading item data for outputs.
+
+        This affects methods like currentData(), getCurrentOptions(), and the
+        'data' branch of typeSelection(). By default, the role is
+        Qt.ItemDataRole.UserRole.
+
+        Note:
+            This does not change how data is written by addItem/addItems, which
+            store provided data in Qt.UserRole. If you want to use a different
+            role for outputs, ensure your items have data stored at that role.
+        """
+        self._outputDataRole = role
+
+    def getOutputDataRole(self) -> Qt.ItemDataRole:
+        """Get the Qt data role used when reading item data for outputs."""
+        return self._outputDataRole

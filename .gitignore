@@ -1,2 +1,16 @@
 venv/
 run.py
+# Editor settings
+.vscode/
+
+# Python caches and bytecode
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Coverage artifacts
+.coverage
+coverage.xml
+htmlcov/

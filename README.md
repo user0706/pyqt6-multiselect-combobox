@@ -9,6 +9,7 @@ The primary purpose of MultiSelectComboBox is to offer a user-friendly interface
 - **Multiple Selection**: Users can select multiple items from the dropdown list.
 - **Customizable Display**: The widget allows customization of the display format for both the selected items and the dropdown items.
 - **Output Control**: Users can control whether the output should be in the form of data or text.
+- **Configurable Data Role**: Control which Qt data role is used for outputs via `setOutputDataRole()`/`getOutputDataRole()`; defaults to `Qt.ItemDataRole.UserRole`.
 - **Display Delimiter**: Users can specify a custom delimiter to separate the displayed items.
 - **Resizable**: The widget dynamically adjusts its size to accommodate the selected items.
 - **User-friendly Interface**: The interface is designed to be intuitive, allowing users to easily select and deselect items.
@@ -85,6 +86,23 @@ To use the MultiSelectComboBox widget in your PyQt6 application, follow these st
    idx_text = multi_select_combo_box.findText("Banana")
    idx_data = multi_select_combo_box.findData("Data 2")
    ```
+
+13. **Data/Text Roles and Output Role**
+
+   - Methods that return values based on the configured type, such as `currentData()` and the `'data'` branch of `typeSelection(index, ...)`, read item data using the widget's configured output data role.
+   - By default, the output data role is `Qt.ItemDataRole.UserRole`, which aligns with Qt idioms for storing custom item data.
+   - You can change which role is used when reading data with:
+     ```python
+     from PyQt6.QtCore import Qt
+
+     multi_select_combo_box.setOutputDataRole(Qt.ItemDataRole.UserRole)
+     role = multi_select_combo_box.getOutputDataRole()
+     ```
+   - Note: `addItem(text, data)` and `addItems(texts, dataList)` store the provided `data` into `Qt.ItemDataRole.UserRole`. If you switch the output role, ensure your items have data populated at that role (e.g., by setting it yourself on the underlying model items).
+
+   - The helper `typeSelection(index, type_variable, expected_type='data')` returns:
+     - `item.data(getOutputDataRole())` when `type_variable == expected_type` (default is `'data'`).
+     - `item.text()` otherwise.
 
 12. **Listen to Selection Changes**:
     ```python
