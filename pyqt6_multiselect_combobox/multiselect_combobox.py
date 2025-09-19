@@ -13,7 +13,13 @@ class MultiSelectComboBox(QComboBox):
     class Delegate(QStyledItemDelegate):
         def sizeHint(self, option, index):  # pragma: no cover (cosmetic GUI sizing)
             size = super().sizeHint(option, index)
-            size.setHeight(20)
+            # HiDPI-aware height based on font metrics with a small padding
+            try:
+                metrics = option.fontMetrics  # type: ignore[attr-defined]
+            except Exception:
+                metrics = QFontMetrics(option.font)
+            padding = 6
+            size.setHeight(metrics.height() + padding)
             return size
 
     # Emitted when the selection set changes. Emits list of currently selected values
@@ -51,6 +57,13 @@ class MultiSelectComboBox(QComboBox):
         self.lineEdit().installEventFilter(self)
         self.closeOnLineEditClick = False
         self.view().viewport().installEventFilter(self)
+        self.view().installEventFilter(self)  # for key handling when popup open
+
+        # Whether selecting an item should close the popup (configurable)
+        self._closeOnSelect = False
+
+        # Reentrancy guard for updateText
+        self._updatingText = False
 
     def setOutputType(self, output_type: str) -> None:
         """Set the output type for the combo box.
@@ -146,6 +159,32 @@ class MultiSelectComboBox(QComboBox):
             else:
                 self.showPopup()
             return True
+        # Keyboard support when popup is open: Space/Enter toggles highlighted row
+        if obj in (self.view(), self.view().viewport()) and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                index = self.view().currentIndex()
+                if index.isValid():
+                    row = index.row()
+                    if self._selectAllEnabled and row == 0:
+                        sa_item = self.model().item(0)
+                        state = sa_item.data(Qt.ItemDataRole.CheckStateRole)
+                        if state in (Qt.CheckState.Unchecked, Qt.CheckState.PartiallyChecked):
+                            self.selectAll()
+                        else:
+                            self.clearSelection()
+                    else:
+                        item = self.model().itemFromIndex(index)
+                        state = item.data(Qt.ItemDataRole.CheckStateRole)
+                        new_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
+                        item.setData(new_state, Qt.ItemDataRole.CheckStateRole)
+                        self._syncSelectAllState()
+                        self._emitSelectionIfChanged()
+                    if self._closeOnSelect:
+                        # Close the QComboBox popup and ensure the view is hidden
+                        self.hidePopup()
+                        self._forceHidePopupView()
+                    return True
         if obj == self.view().viewport() and event.type() == QEvent.Type.MouseButtonRelease:
             index = self.view().indexAt(event.position().toPoint())
             if not index.isValid():
@@ -154,20 +193,26 @@ class MultiSelectComboBox(QComboBox):
             if self._selectAllEnabled and row == 0:
                 # Toggle tri-state 'Select All'
                 sa_item = self.model().item(0)
-                if sa_item.checkState() in (Qt.CheckState.Unchecked, Qt.CheckState.PartiallyChecked):
+                state = sa_item.data(Qt.ItemDataRole.CheckStateRole)
+                if state in (Qt.CheckState.Unchecked, Qt.CheckState.PartiallyChecked):
                     self.selectAll()
                 else:
                     self.clearSelection()
+                if self._closeOnSelect:
+                    # Close the QComboBox popup and ensure the view is hidden
+                    self.hidePopup()
+                    self._forceHidePopupView()
                 return True
             else:
                 item = self.model().itemFromIndex(index)
-                if item.checkState() == Qt.CheckState.Checked:
-                    item.setCheckState(Qt.CheckState.Unchecked)
-                else:
-                    item.setCheckState(Qt.CheckState.Checked)
+                state = item.data(Qt.ItemDataRole.CheckStateRole)
+                new_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
+                item.setData(new_state, Qt.ItemDataRole.CheckStateRole)
                 # Update Select All state and emit selection change
                 self._syncSelectAllState()
                 self._emitSelectionIfChanged()
+                if self._closeOnSelect:
+                    self.hidePopup()
                 return True
         return False
 
@@ -182,6 +227,16 @@ class MultiSelectComboBox(QComboBox):
         """
         super().hidePopup()
         self.startTimer(100)
+
+    def _forceHidePopupView(self) -> None:
+        """Ensure the internal view used for the popup is hidden immediately."""
+        try:
+            v = self.view()
+            v.hide()
+            if v.viewport() is not None:
+                v.viewport().hide()
+        except Exception:
+            pass
 
     def timerEvent(self, event) -> None:
         """Timer event handler.
@@ -210,24 +265,39 @@ class MultiSelectComboBox(QComboBox):
     def updateText(self) -> None:
         """Update the displayed text based on selected items.
         """
-        display_type = self.getDisplayType()
-        delimiter = self.getDisplayDelimiter()
-        texts = [
-            self.typeSelection(i, display_type)
-            for i in range(self._firstOptionRow(), self.model().rowCount())
-            if self.model().item(i).checkState() == Qt.CheckState.Checked
-        ]
-        
-        if texts:
-            text = delimiter.join(texts)
-        else:
-            text = self.placeholderText if hasattr(self, 'placeholderText') else ""
-        
-        metrics = QFontMetrics(self.lineEdit().font())
-        elidedText = metrics.elidedText(
-            text, Qt.TextElideMode.ElideRight, self.lineEdit().width()
-        )
-        self.lineEdit().setText(elidedText)
+        if self._updatingText:
+            return
+        self._updatingText = True
+        try:
+            display_type = self.getDisplayType()
+            delimiter = self.getDisplayDelimiter()
+            texts = [
+                self.typeSelection(i, display_type)
+                for i in range(self._firstOptionRow(), self.model().rowCount())
+                if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+            ]
+
+            if texts:
+                text = delimiter.join(texts)
+            else:
+                text = self.placeholderText if hasattr(self, 'placeholderText') else ""
+
+            # Also set native placeholder for better styling when empty
+            if not texts:
+                self.lineEdit().setPlaceholderText(self.placeholderText)
+
+            metrics = QFontMetrics(self.lineEdit().font())
+            elidedText = metrics.elidedText(
+                text, Qt.TextElideMode.ElideRight, self.lineEdit().width()
+            )
+            # Block signals during programmatic update to avoid re-entrancy
+            self.lineEdit().blockSignals(True)
+            try:
+                self.lineEdit().setText(elidedText)
+            finally:
+                self.lineEdit().blockSignals(False)
+        finally:
+            self._updatingText = False
 
     def addItem(self, text: str, data: str = None) -> None:
         """Add an item to the combo box.
@@ -248,7 +318,7 @@ class MultiSelectComboBox(QComboBox):
         item.setText(text)
         item.setData(data or text)
         item.setFlags(
-            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
         )
         item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         self.model().appendRow(item)
@@ -276,7 +346,7 @@ class MultiSelectComboBox(QComboBox):
         return [
             self.typeSelection(i, output_type)
             for i in range(self._firstOptionRow(), self.model().rowCount())
-            if self.model().item(i).checkState() == Qt.CheckState.Checked
+            if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
         ]
 
     def setCurrentIndexes(self, indexes: list) -> None:
@@ -288,8 +358,9 @@ class MultiSelectComboBox(QComboBox):
         self._beginBulkUpdate()
         try:
             for i in range(self._firstOptionRow(), self.model().rowCount()):
-                self.model().item(i).setCheckState(
-                    Qt.CheckState.Checked if i in indexes else Qt.CheckState.Unchecked
+                self.model().item(i).setData(
+                    Qt.CheckState.Checked if i in indexes else Qt.CheckState.Unchecked,
+                    Qt.ItemDataRole.CheckStateRole,
                 )
         finally:
             self._endBulkUpdate()
@@ -303,7 +374,7 @@ class MultiSelectComboBox(QComboBox):
         return [
             i
             for i in range(self._firstOptionRow(), self.model().rowCount())
-            if self.model().item(i).checkState() == Qt.CheckState.Checked
+            if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
         ]
 
     def setPlaceholderText(self, text: str) -> None:
@@ -313,6 +384,8 @@ class MultiSelectComboBox(QComboBox):
             text (str): The placeholder text.
         """
         self.placeholderText = text
+        # Use native placeholder styling too
+        self.lineEdit().setPlaceholderText(text)
         self.updateText()
 
     def showEvent(self, event) -> None:
@@ -325,6 +398,18 @@ class MultiSelectComboBox(QComboBox):
         self.updateText()
         self._syncSelectAllState()
     
+    def setCloseOnSelect(self, enabled: bool) -> None:
+        """Set whether the popup should close after selecting/toggling an item.
+
+        Args:
+            enabled (bool): If True, the popup closes upon selection.
+        """
+        self._closeOnSelect = bool(enabled)
+
+    def isCloseOnSelect(self) -> bool:
+        """Return whether the popup closes after selecting/toggling an item."""
+        return self._closeOnSelect
+
     def getCurrentOptions(self):
         """Get the currently selected options along with their associated data.
 
@@ -334,7 +419,7 @@ class MultiSelectComboBox(QComboBox):
         """
         res = []
         for i in range(self._firstOptionRow(), self.model().rowCount()):
-            if self.model().item(i).checkState() == Qt.CheckState.Checked:
+            if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked:
                 res.append((self.model().item(i).text(), self.model().item(i).data()))
         return res
     
@@ -376,7 +461,7 @@ class MultiSelectComboBox(QComboBox):
         parts = [
             self.typeSelection(i, display_type)
             for i in range(self._firstOptionRow(), self.model().rowCount())
-            if self.model().item(i).checkState() == Qt.CheckState.Checked
+            if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
         ]
         if parts:
             return delimiter.join(parts)
@@ -408,7 +493,10 @@ class MultiSelectComboBox(QComboBox):
             for i in range(self._firstOptionRow(), self.model().rowCount()):
                 item = self.model().item(i)
                 match = item.text() in to_select or str(item.data()) in to_select
-                item.setCheckState(Qt.CheckState.Checked if match else Qt.CheckState.Unchecked)
+                item.setData(
+                    Qt.CheckState.Checked if match else Qt.CheckState.Unchecked,
+                    Qt.ItemDataRole.CheckStateRole,
+                )
         finally:
             self._endBulkUpdate()
 
@@ -457,7 +545,7 @@ class MultiSelectComboBox(QComboBox):
         self._beginBulkUpdate()
         try:
             for i in range(self._firstOptionRow(), self.model().rowCount()):
-                self.model().item(i).setCheckState(Qt.CheckState.Checked)
+                self.model().item(i).setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
         finally:
             self._endBulkUpdate()
 
@@ -470,7 +558,7 @@ class MultiSelectComboBox(QComboBox):
         self._beginBulkUpdate()
         try:
             for i in range(self._firstOptionRow(), self.model().rowCount()):
-                self.model().item(i).setCheckState(Qt.CheckState.Unchecked)
+                self.model().item(i).setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         finally:
             self._endBulkUpdate()
 
@@ -484,8 +572,10 @@ class MultiSelectComboBox(QComboBox):
         try:
             for i in range(self._firstOptionRow(), self.model().rowCount()):
                 item = self.model().item(i)
-                item.setCheckState(
-                    Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked else Qt.CheckState.Checked
+                state = item.data(Qt.ItemDataRole.CheckStateRole)
+                item.setData(
+                    Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked,
+                    Qt.ItemDataRole.CheckStateRole,
                 )
         finally:
             self._endBulkUpdate()
@@ -509,7 +599,7 @@ class MultiSelectComboBox(QComboBox):
                 sa = QStandardItem()
                 sa.setText(self._selectAllText)
                 sa.setData("__select_all__")
-                sa.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+                sa.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
                 sa.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
                 self.model().insertRow(0, sa)
         else:
@@ -541,15 +631,15 @@ class MultiSelectComboBox(QComboBox):
             return
         total = self.model().rowCount() - self._firstOptionRow()
         if total <= 0:
-            sa.setCheckState(Qt.CheckState.Unchecked)
+            sa.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
             return
-        checked = sum(1 for i in range(self._firstOptionRow(), self.model().rowCount()) if self.model().item(i).checkState() == Qt.CheckState.Checked)
+        checked = sum(1 for i in range(self._firstOptionRow(), self.model().rowCount()) if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked)
         if checked == 0:
-            sa.setCheckState(Qt.CheckState.Unchecked)
+            sa.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         elif checked == total:
-            sa.setCheckState(Qt.CheckState.Checked)
+            sa.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
         else:
-            sa.setCheckState(Qt.CheckState.PartiallyChecked)
+            sa.setData(Qt.CheckState.PartiallyChecked, Qt.ItemDataRole.CheckStateRole)
 
     def _emitSelectionIfChanged(self) -> None:
         current = self.currentData()

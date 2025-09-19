@@ -336,3 +336,55 @@ def test_find_text_case_sensitive_and_contains(combo: MultiSelectComboBox):
     assert combo.findText("b", Qt.MatchFlag.MatchContains | Qt.MatchFlag.MatchCaseSensitive) == -1
     # Case insensitive contains should pass
     assert combo.findText("b", Qt.MatchFlag.MatchContains) == 1
+
+
+def test_keyboard_space_enter_toggle(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])
+    c.setSelectAllEnabled(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Toggle first option with Space then Enter
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    assert c.getCurrentIndexes() == [1]
+    QTest.keyClick(c.view(), Qt.Key.Key_Return)
+    assert c.getCurrentIndexes() == []
+
+    # Toggle Select All row with Space
+    c.view().setCurrentIndex(c.model().index(0, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    assert [i for i in range(1, c.model().rowCount())] == c.getCurrentIndexes()
+
+
+def test_close_on_select_behavior(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setSelectAllEnabled(True)
+    c.setCloseOnSelect(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Select an item via keyboard; popup should close
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+
+
+def test_item_flags_include_selectable(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A"]) 
+    flags = c.model().item(0).flags()
+    assert bool(flags & Qt.ItemFlag.ItemIsSelectable)
+
+
+def test_placeholder_sets_native(qapp):
+    c = MultiSelectComboBox()
+    c.setPlaceholderText("Pick items")
+    assert c.lineEdit().placeholderText() == "Pick items"
