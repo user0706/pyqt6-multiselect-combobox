@@ -1,5 +1,8 @@
 # MultiSelectComboBox
 
+![CI - Tests](https://github.com/user0706/pyqt6-multiselect-combobox/actions/workflows/tests.yml/badge.svg?branch=main)
+[![codecov](https://codecov.io/gh/user0706/pyqt6-multiselect-combobox/graph/badge.svg)](https://app.codecov.io/gh/user0706/pyqt6-multiselect-combobox)
+
 MultiSelectComboBox is a custom widget built using PyQt6 that provides a dropdown combo box allowing users to select multiple items. This widget is particularly useful in scenarios where users need to select multiple options from a list.
 
 ## Purpose
