@@ -21,6 +21,7 @@ The primary purpose of MultiSelectComboBox is to offer a user-friendly interface
  - **Optional "Select All" Item**: Tri-state pseudo-item at the top with `setSelectAllEnabled(True)`.
  - **Signals**: Emits `selectionChanged(list)` whenever selection changes.
  - **Duplicate Policy**: Control duplicates via `setDuplicatesEnabled(bool)`; enforced in `addItem`/`addItems`.
+ - **Performance & Scaling**: Efficient with large item counts via a cached set of checked indices, coalesced UI refresh with `QTimer.singleShot(0, ...)`, and public batch APIs `beginUpdate()` / `endUpdate()`.
 
 See all features in [documentation](https://pyqt6-multiselect-combobox.readthedocs.io/en/latest/).
 
@@ -147,6 +148,27 @@ if __name__ == "__main__":
 - **Duplicate Policy**: When duplicates are disabled (`setDuplicatesEnabled(False)`), `addItem`/`addItems` will skip adding any item whose text OR data matches an existing option. This check ignores the optional "Select All" item.
 - **Feedback and Contributions**: Feedback and contributions are welcome. Feel free to open an issue or submit a pull request on [GitHub](https://github.com/user0706/pyqt6-multiselect-combobox).
 - **License**: This package is provided under the MIT License.
+
+## Performance and Scaling
+
+When using thousands of items, repeatedly scanning the entire model on every change can be expensive. The widget includes several optimizations to keep interactions smooth:
+
+- Cached checked indices: Maintains a set of checked rows to avoid O(n) scans on every `dataChanged`.
+- Coalesced updates: Defers UI refresh work with `QTimer.singleShot(0, ...)` so multiple rapid changes are batched into one `updateText()`/signal emission cycle.
+- Model structure handling: Listens to `rowsInserted`, `rowsRemoved`, and `modelReset` to rebuild caches only when necessary.
+- Public batching API: Use `beginUpdate()` / `endUpdate()` to coalesce large batch operations (e.g., bulk selecting/adding items) into a single refresh.
+
+Example: batch set selection with a single refresh
+
+```python
+combo.beginUpdate()
+try:
+    # Perform many changes without incurring multiple refreshes
+    combo.clearSelection()
+    combo.setCurrentIndexes([1, 5, 9])  # or any number of programmatic toggles
+finally:
+    combo.endUpdate()  # triggers one coalesced update
+```
 
 ## Testing & Coverage
 This repo includes a pytest suite. To run with coverage using `pytest-cov`:
