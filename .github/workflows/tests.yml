@@ -79,10 +79,12 @@ jobs:
           path: coverage.xml
 
       - name: Upload coverage to Codecov (Linux, Python 3.12)
-        if: ${{ github.event_name != 'pull_request' && runner.os == 'Linux' && matrix.python-version == '3.12' }}
-        uses: codecov/codecov-action@v4
+        if: ${{ runner.os == 'Linux' && matrix.python-version == '3.12' }}
+        uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
+          name: ${{ runner.os }}-py${{ matrix.python-version }}
+          flags: os-${{ runner.os }},py-${{ matrix.python-version }}
           fail_ci_if_error: false
           verbose: true
 
