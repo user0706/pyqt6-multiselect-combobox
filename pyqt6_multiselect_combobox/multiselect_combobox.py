@@ -2,7 +2,7 @@ from typing import Any, Iterable, List, Optional, Tuple
 
 from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate
 from PyQt6.QtGui import QStandardItem, QPalette, QFontMetrics
-from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QObject, QTimerEvent
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QObject, QTimerEvent, QTimer
 
 
 class MultiSelectComboBox(QComboBox):
@@ -40,6 +40,10 @@ class MultiSelectComboBox(QComboBox):
         self._inBulkUpdate = False
         self._selectAllEnabled = False
         self._selectAllText = "Select All"
+        # Cache of checked rows for performance on large models
+        self._checkedRows: set[int] = set()
+        # Coalesced update scheduling flag
+        self._updateScheduled: bool = False
 
         # Output data role used when reading item data (e.g., for currentData())
         # Defaults to Qt.ItemDataRole.UserRole to align with Qt idioms.
@@ -60,6 +64,14 @@ class MultiSelectComboBox(QComboBox):
         self.setDisplayDelimiter(",")
 
         self.model().dataChanged.connect(self._onModelDataChanged)
+        # Listen to structure changes to rebuild caches efficiently
+        self.model().rowsInserted.connect(self._onRowsInserted)
+        self.model().rowsRemoved.connect(self._onRowsRemoved)
+        try:
+            self.model().modelReset.connect(self._onModelReset)
+        except Exception:
+            # Some models may not expose modelReset the same way; ignore
+            pass
         self.lineEdit().installEventFilter(self)
         self.closeOnLineEditClick = False
         self.view().viewport().installEventFilter(self)
@@ -70,6 +82,9 @@ class MultiSelectComboBox(QComboBox):
 
         # Reentrancy guard for updateText
         self._updatingText = False
+
+        # Initialize caches
+        self._rebuildCheckedCache()
 
     def setOutputType(self, output_type: str) -> None:
         """Set the output type for the combo box.
@@ -284,11 +299,9 @@ class MultiSelectComboBox(QComboBox):
         try:
             display_type = self.getDisplayType()
             delimiter = self.getDisplayDelimiter()
-            texts = [
-                self.typeSelection(i, display_type)
-                for i in range(self._firstOptionRow(), self.model().rowCount())
-                if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
-            ]
+            # Build texts using cached checked rows to avoid scanning full model
+            rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
+            texts = [self.typeSelection(i, display_type) for i in rows]
 
             if texts:
                 text = delimiter.join(texts)
@@ -361,11 +374,8 @@ class MultiSelectComboBox(QComboBox):
             List[Any]: A list of currently selected data (read using getOutputDataRole()).
         """
         output_type = self.getOutputType()
-        return [
-            self.typeSelection(i, output_type)
-            for i in range(self._firstOptionRow(), self.model().rowCount())
-            if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
-        ]
+        rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
+        return [self.typeSelection(i, output_type) for i in rows]
 
     def setCurrentIndexes(self, indexes: List[int]) -> None:
         """Set the selected items based on the provided indexes.
@@ -389,11 +399,7 @@ class MultiSelectComboBox(QComboBox):
         Returns:
             List[int]: A list of indexes of selected items.
         """
-        return [
-            i
-            for i in range(self._firstOptionRow(), self.model().rowCount())
-            if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
-        ]
+        return sorted(r for r in self._checkedRows if self._isOptionRow(r))
 
     def setPlaceholderText(self, text: str) -> None:
         """Set the placeholder text for the combo box.
@@ -413,7 +419,7 @@ class MultiSelectComboBox(QComboBox):
             event: The show event.
         """
         super().showEvent(event)
-        self.updateText()
+        self._scheduleCoalescedUpdate()
         self._syncSelectAllState()
     
     def setCloseOnSelect(self, enabled: bool) -> None:
@@ -476,11 +482,8 @@ class MultiSelectComboBox(QComboBox):
         """
         display_type = self.getDisplayType()
         delimiter = self.getDisplayDelimiter()
-        parts = [
-            self.typeSelection(i, display_type)
-            for i in range(self._firstOptionRow(), self.model().rowCount())
-            if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
-        ]
+        rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
+        parts = [self.typeSelection(i, display_type) for i in rows]
         if parts:
             return delimiter.join(parts)
         return self.placeholderText if hasattr(self, 'placeholderText') else ""
@@ -651,7 +654,7 @@ class MultiSelectComboBox(QComboBox):
         if total <= 0:
             sa.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
             return
-        checked = sum(1 for i in range(self._firstOptionRow(), self.model().rowCount()) if self.model().item(i).data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked)
+        checked = len([r for r in self._checkedRows if self._isOptionRow(r)])
         if checked == 0:
             sa.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         elif checked == total:
@@ -669,18 +672,33 @@ class MultiSelectComboBox(QComboBox):
         # Any change might affect display text/selection
         if self._inBulkUpdate:
             return
-        self.updateText()
-        self._syncSelectAllState()
-        self._emitSelectionIfChanged()
+        # Update cache only for affected rows when check state changes; otherwise just refresh text
+        roles = roles or []
+        check_role_changed = (not roles) or (Qt.ItemDataRole.CheckStateRole in roles)
+        if check_role_changed:
+            for row in range(topLeft.row(), bottomRight.row() + 1):
+                if not self._isOptionRow(row):
+                    continue
+                item = self.model().item(row)
+                if item is None:
+                    continue
+                state = item.data(Qt.ItemDataRole.CheckStateRole)
+                if state == Qt.CheckState.Checked:
+                    self._checkedRows.add(row)
+                else:
+                    self._checkedRows.discard(row)
+        # Coalesce expensive UI updates
+        self._scheduleCoalescedUpdate()
 
     def _beginBulkUpdate(self) -> None:
         self._inBulkUpdate = True
 
     def _endBulkUpdate(self) -> None:
         self._inBulkUpdate = False
-        self._syncSelectAllState()
-        self.updateText()
-        self._emitSelectionIfChanged()
+        self._rebuildCheckedCache()
+        # For explicit bulk operations, perform the coalesced update immediately
+        # to preserve synchronous behavior expected by tests and callers.
+        self._performCoalescedUpdate()
 
     def _matchText(self, item_text: str, pattern: str, flags: Qt.MatchFlag) -> bool:
         # Implement a subset: MatchExactly, MatchContains, MatchFixedString, MatchCaseSensitive
@@ -715,3 +733,57 @@ class MultiSelectComboBox(QComboBox):
     def getOutputDataRole(self) -> Qt.ItemDataRole:
         """Get the Qt data role used when reading item data for outputs."""
         return self._outputDataRole
+
+    # --- Performance helpers ---
+    def _isOptionRow(self, row: int) -> bool:
+        return row >= self._firstOptionRow()
+
+    def _rebuildCheckedCache(self) -> None:
+        self._checkedRows.clear()
+        start = self._firstOptionRow()
+        for i in range(start, self.model().rowCount()):
+            item = self.model().item(i)
+            if item is not None and item.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked:
+                self._checkedRows.add(i)
+
+    def _onRowsInserted(self, parent, start: int, end: int) -> None:
+        # Rebuild cache as rows shift; then schedule update
+        if self._inBulkUpdate:
+            return
+        self._rebuildCheckedCache()
+        self._scheduleCoalescedUpdate()
+
+    def _onRowsRemoved(self, parent, start: int, end: int) -> None:
+        # Rebuild cache as rows shift; then schedule update
+        if self._inBulkUpdate:
+            return
+        self._rebuildCheckedCache()
+        self._scheduleCoalescedUpdate()
+
+    def _onModelReset(self) -> None:
+        # Model structure changed drastically
+        if self._inBulkUpdate:
+            return
+        self._rebuildCheckedCache()
+        self._scheduleCoalescedUpdate()
+
+    def _scheduleCoalescedUpdate(self) -> None:
+        if self._updateScheduled:
+            return
+        self._updateScheduled = True
+        QTimer.singleShot(0, self._performCoalescedUpdate)
+
+    def _performCoalescedUpdate(self) -> None:
+        self._updateScheduled = False
+        self.updateText()
+        self._syncSelectAllState()
+        self._emitSelectionIfChanged()
+
+    # --- Public API for coalescing updates ---
+    def beginUpdate(self) -> None:
+        """Public API to begin a batch update, deferring UI refresh."""
+        self._beginBulkUpdate()
+
+    def endUpdate(self) -> None:
+        """Public API to end a batch update and refresh once."""
+        self._endBulkUpdate()
