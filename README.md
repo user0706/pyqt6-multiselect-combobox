@@ -12,6 +12,11 @@ The primary purpose of MultiSelectComboBox is to offer a user-friendly interface
 - **Display Delimiter**: Users can specify a custom delimiter to separate the displayed items.
 - **Resizable**: The widget dynamically adjusts its size to accommodate the selected items.
 - **User-friendly Interface**: The interface is designed to be intuitive, allowing users to easily select and deselect items.
+ - **QComboBox API Parity**: Implements `currentText()`, `setCurrentText()` (string or list), `findText()`, `findData()`.
+ - **Bulk Selection Helpers**: `selectAll()`, `clearSelection()`, `invertSelection()`.
+ - **Optional "Select All" Item**: Tri-state pseudo-item at the top with `setSelectAllEnabled(True)`.
+ - **Signals**: Emits `selectionChanged(list)` whenever selection changes.
+ - **Duplicate Policy**: Control duplicates via `setDuplicatesEnabled(bool)`; enforced in `addItem`/`addItems`.
 
 See all features in [documentation](https://pyqt6-multiselect-combobox.readthedocs.io/en/latest/).
 
@@ -45,6 +50,7 @@ To use the MultiSelectComboBox widget in your PyQt6 application, follow these st
    multi_select_combo_box.setDisplayType("text")
    multi_select_combo_box.setOutputType("data")
    multi_select_combo_box.setDisplayDelimiter(", ")
+   multi_select_combo_box.setSelectAllEnabled(True)  # optional tri-state 'Select All' at the top
    ```
 
 6. **Event Handling**: Handle events such as item selection and deselection if required.
@@ -52,6 +58,40 @@ To use the MultiSelectComboBox widget in your PyQt6 application, follow these st
 7. **Accessing Selected Data**: Retrieve the selected data using the `currentData()` method:
    ```python
    selected_data = multi_select_combo_box.currentData()
+   ```
+
+8. **Accessing Display Text**: Retrieve the un-elided joined display text using `currentText()`:
+   ```python
+   joined_text = multi_select_combo_box.currentText()
+   ```
+
+9. **Programmatic Selection**:
+   ```python
+   # select by joined string (uses display delimiter)
+   multi_select_combo_box.setCurrentText("Apple, Banana")
+   # or by list of strings (matches text or data)
+   multi_select_combo_box.setCurrentText(["Apple", "Orange"]) 
+   ```
+
+10. **Bulk Selection Helpers**:
+    ```python
+   multi_select_combo_box.selectAll()
+   multi_select_combo_box.clearSelection()
+   multi_select_combo_box.invertSelection()
+   ```
+
+11. **Find Helpers**:
+    ```python
+   idx_text = multi_select_combo_box.findText("Banana")
+   idx_data = multi_select_combo_box.findData("Data 2")
+   ```
+
+12. **Listen to Selection Changes**:
+    ```python
+   def on_selection_changed(values):
+       print("Selected values:", values)
+
+   multi_select_combo_box.selectionChanged.connect(on_selection_changed)
    ```
 
 ## Example
@@ -83,7 +123,18 @@ if __name__ == "__main__":
 
 ## Additional Notes
 - **Compatibility**: MultiSelectComboBox is compatible with PyQt6.
+- **Duplicate Policy**: When duplicates are disabled (`setDuplicatesEnabled(False)`), `addItem`/`addItems` will skip adding any item whose text OR data matches an existing option. This check ignores the optional "Select All" item.
 - **Feedback and Contributions**: Feedback and contributions are welcome. Feel free to open an issue or submit a pull request on [GitHub](https://github.com/user0706/pyqt6-multiselect-combobox).
 - **License**: This package is provided under the MIT License.
+
+## Testing & Coverage
+This repo includes a pytest suite. To run with coverage using `pytest-cov`:
+
+```bash
+pip install pytest pytest-cov
+python -m pytest  # or: pytest
+```
+
+Coverage configuration is provided via `pytest.ini`. It reports terminal summary and writes an XML report to `coverage.xml`.
 
 For more detailed usage and customization options, refer to the [documentation](https://pyqt6-multiselect-combobox.readthedocs.io/en/latest/).
