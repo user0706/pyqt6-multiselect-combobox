@@ -29,4 +29,7 @@ formats:
 # See https://docs.readthedocs.io/en/stable/guides/reproducible-builds.html
 python:
    install:
-   - requirements: requirements.txt
+     - requirements: requirements.txt
+     # Install the released package from PyPI so docs use the real package version
+     - method: pip
+       name: pyqt6-multiselect-combobox
