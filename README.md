@@ -33,6 +33,19 @@ To use the MultiSelectComboBox widget in your PyQt6 application, follow these st
    pip install pyqt6-multiselect-combobox
    ```
 
+   Or install from source (editable/development mode):
+   ```bash
+   git clone https://github.com/user0706/pyqt6-multiselect-combobox.git
+   cd pyqt6-multiselect-combobox
+   pip install -e .
+   ```
+
+   To build local distribution artifacts (requires the "build" package):
+   ```bash
+   python -m pip install --upgrade build
+   python -m build  # creates dist/*.whl and dist/*.tar.gz using pyproject.toml
+   ```
+
 2. **Import**: Import the MultiSelectComboBox class into your Python code:
    ```python
    from pyqt6_multiselect_combobox import MultiSelectComboBox
