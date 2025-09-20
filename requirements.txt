@@ -6,3 +6,6 @@ sphinx-copybutton>=0.5
 sphinx-design>=0.5
 # Optional, if enabling autodoc for package API later:
 # PyQt6>=6.6
+
+# Install the package so autodoc can import it
+pyqt6-multiselect-combobox

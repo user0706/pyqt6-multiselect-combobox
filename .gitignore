@@ -10,6 +10,7 @@ coverage.xml
 .pytest_cache/
 
 # Build metadata generated locally (keep minimal/specific)
+pyqt6-multiselect-combobox/
 pyqt6_multiselect_combobox.egg-info/
 
 # Editor settings (do not share personal IDE config)
@@ -17,3 +18,4 @@ pyqt6_multiselect_combobox.egg-info/
 
 # Test bytecode cache (do not commit generated __pycache__)
 tests/__pycache__/
+tests/

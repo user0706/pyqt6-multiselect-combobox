@@ -17,4 +17,11 @@ Key methods
 
 Note
 ----
-Autodoc can be enabled later when the package module is accessible during Read the Docs builds.
+The API reference below is generated automatically from the installed package.
+
+Autodoc
+--------
+.. automodule:: pyqt6_multiselect_combobox
+   :members:
+   :undoc-members:
+   :show-inheritance:

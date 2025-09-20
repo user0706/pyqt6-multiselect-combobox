@@ -20,7 +20,7 @@ except Exception:  # pragma: no cover
     tomllib = None  # type: ignore
 
 project = 'PyQt6 MultiSelectComboBox'
-copyright = '2024, user0706'
+copyright = '2025, user0706'
 author = 'user0706'
 
 # Figure out docs version with multiple strategies
@@ -74,6 +74,8 @@ autodoc_default_options = {
     'undoc-members': True,
     'show-inheritance': True,
 }
+# Mock heavy/GUI dependencies so RTD can import the package without a Qt backend
+autodoc_mock_imports = ['PyQt6']
 
 # Napoleon (Google/NumPy style docstrings)
 napoleon_google_docstring = True
@@ -105,7 +107,5 @@ html_favicon = "_static/logo.png"
 html_logo = "_static/logo.svg"
 html_theme_options = {
     "sidebar_hide_name": True,
-    "light_logo": "logo-light-mode.svg",
-    "dark_logo": "logo-dark-mode.svg",
     "navigation_with_keys": True,
 }
