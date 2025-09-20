@@ -143,6 +143,70 @@ if __name__ == "__main__":
     app.exec()
 ```
 
+## Examples
+A set of runnable demos is provided under the `examples/` directory:
+
+- `examples/demo.py` — Minimal demo showing basic usage and live selection updates.
+  ```bash
+  python examples/demo.py
+  ```
+
+- `examples/demo_select_all.py` — Demonstrates the optional tri-state "Select All" item.
+  ```bash
+  python examples/demo_select_all.py
+  ```
+
+- `examples/demo_data_role.py` — Shows returning values via data roles with `currentData()` vs `currentText()`.
+  ```bash
+  python examples/demo_data_role.py
+  ```
+
+- `examples/demo_objects.py` — Adds custom Python objects (e.g., dataclasses) as item data and reads them back.
+  ```bash
+  python examples/demo_objects.py
+  ```
+
+- `examples/demo_programmatic_selection.py` — Programmatically selects items using `setCurrentText()` (string and list forms).
+  ```bash
+  python examples/demo_programmatic_selection.py
+  ```
+
+- `examples/demo_batch_update.py` — Uses `beginUpdate()`/`endUpdate()` with bulk selection helpers.
+  ```bash
+  python examples/demo_batch_update.py
+  ```
+
+### Styling Examples
+
+- `examples/demo_custom_style.py` — Dark theme using palette + style sheet for combo, popup, and scrollbars.
+  ```bash
+  python examples/demo_custom_style.py
+  ```
+
+- `examples/demo_custom_style_light.py` — Light theme variant with hover/focus borders.
+  ```bash
+  python examples/demo_custom_style_light.py
+  ```
+
+- `examples/demo_custom_style_hover_icon.py` — Custom arrow icon plus hover/focus styles. Uses `assets/chevron-down.svg`.
+  ```bash
+  python examples/demo_custom_style_hover_icon.py
+  ```
+
+- `examples/demo_per_item_styles.py` — Per-item colors/fonts via model roles (`ForegroundRole`, `FontRole`).
+  ```bash
+  python examples/demo_per_item_styles.py
+  ```
+
+## Screenshots / GIFs
+
+Screenshots and short GIFs demonstrating the widget in action are welcome! If you have nice captures, please submit a PR adding them under a new `assets/` directory and link them here. Example placeholders:
+
+<!--
+![Basic usage](assets/basic-usage.png)
+![Selection demo](assets/selection-demo.gif)
+-->
+
 ## Additional Notes
 - **Compatibility**: MultiSelectComboBox is compatible with PyQt6.
 - **Duplicate Policy**: When duplicates are disabled (`setDuplicatesEnabled(False)`), `addItem`/`addItems` will skip adding any item whose text OR data matches an existing option. This check ignores the optional "Select All" item.

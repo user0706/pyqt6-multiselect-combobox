@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyqt6-multiselect-combobox"
+version = "1.1.1"
+description = "A custom PyQt6 widget providing a multi-select combobox functionality for PyQt6 applications."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+  { name = "user0706" }
+]
+dependencies = [
+  "PyQt6>=6.6.1",
+]
+keywords = ["PyQt6", "Qt", "combobox", "multi-select", "widget"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/user0706/pyqt6-multiselect-combobox"
+Issues = "https://github.com/user0706/pyqt6-multiselect-combobox/issues"
+Documentation = "https://pyqt6-multiselect-combobox.readthedocs.io/en/latest/"
+
+[tool.setuptools]
+packages = ["pyqt6_multiselect_combobox"]
+
+[tool.setuptools.package-data]
+# Include any non-code data files if needed in the future
+pyqt6_multiselect_combobox = []
