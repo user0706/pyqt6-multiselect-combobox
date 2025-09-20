@@ -60,18 +60,11 @@ class MultiSelectComboBox(QComboBox):
 
         self.setItemDelegate(MultiSelectComboBox.Delegate())
         self.setOutputType("data")
-        self.setDisplayType("data")
+        self.setDisplayType("text")
         self.setDisplayDelimiter(",")
 
-        self.model().dataChanged.connect(self._onModelDataChanged)
-        # Listen to structure changes to rebuild caches efficiently
-        self.model().rowsInserted.connect(self._onRowsInserted)
-        self.model().rowsRemoved.connect(self._onRowsRemoved)
-        try:
-            self.model().modelReset.connect(self._onModelReset)
-        except Exception:
-            # Some models may not expose modelReset the same way; ignore
-            pass
+        # Connect to current model's signals
+        self._connectModelSignals(self.model())
         self.lineEdit().installEventFilter(self)
         self.closeOnLineEditClick = False
         self.view().viewport().installEventFilter(self)
@@ -163,6 +156,59 @@ class MultiSelectComboBox(QComboBox):
         """
         self.updateText()
         super().resizeEvent(event)
+
+    # Ensure we stay wired to whichever model is attached to the combo box
+    def setModel(self, model) -> None:  # type: ignore[override]
+        """Override to reconnect signals when a custom model is set at runtime."""
+        try:
+            old = self.model()
+        except Exception:
+            old = None
+        if old is not None:
+            self._disconnectModelSignals(old)
+        super().setModel(model)
+        self._connectModelSignals(self.model())
+        # Rebuild caches and refresh UI to reflect the new model state
+        self._rebuildCheckedCache()
+        self._performCoalescedUpdate()
+
+    def _connectModelSignals(self, m) -> None:
+        try:
+            m.dataChanged.connect(self._onModelDataChanged)
+        except Exception:
+            pass
+        try:
+            m.rowsInserted.connect(self._onRowsInserted)
+        except Exception:
+            pass
+        try:
+            m.rowsRemoved.connect(self._onRowsRemoved)
+        except Exception:
+            pass
+        try:
+            m.modelReset.connect(self._onModelReset)
+        except Exception:
+            # Some models may not expose modelReset the same way; ignore
+            pass
+
+    def _disconnectModelSignals(self, m) -> None:
+        # Best-effort disconnect to avoid duplicate connections
+        try:
+            m.dataChanged.disconnect(self._onModelDataChanged)
+        except Exception:
+            pass
+        try:
+            m.rowsInserted.disconnect(self._onRowsInserted)
+        except Exception:
+            pass
+        try:
+            m.rowsRemoved.disconnect(self._onRowsRemoved)
+        except Exception:
+            pass
+        try:
+            m.modelReset.disconnect(self._onModelReset)
+        except Exception:
+            pass
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         """Event filter to handle mouse button release events.
@@ -304,7 +350,7 @@ class MultiSelectComboBox(QComboBox):
             texts = [self.typeSelection(i, display_type) for i in rows]
 
             if texts:
-                text = delimiter.join(texts)
+                text = delimiter.join(str(t) for t in texts)
             else:
                 text = self.placeholderText if hasattr(self, 'placeholderText') else ""
 
@@ -485,7 +531,7 @@ class MultiSelectComboBox(QComboBox):
         rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
         parts = [self.typeSelection(i, display_type) for i in rows]
         if parts:
-            return delimiter.join(parts)
+            return delimiter.join(str(p) for p in parts)
         return self.placeholderText if hasattr(self, 'placeholderText') else ""
 
     def setCurrentText(self, value: Iterable[str] | str) -> None:  # type: ignore[override]

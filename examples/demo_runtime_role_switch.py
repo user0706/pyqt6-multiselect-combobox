@@ -27,6 +27,7 @@ def main():
     data_label = QLabel("currentData():")
 
     combo = MultiSelectComboBox()
+    combo.setDisplayDelimiter(", ")
 
     # Store different values under DisplayRole and UserRole to demonstrate switching
     from PyQt6.QtGui import QStandardItem
@@ -36,8 +37,15 @@ def main():
 
     def add_item(text, code):
         it = QStandardItem(text)
-        it.setData(text, Qt.ItemDataRole.DisplayRole)
-        it.setData({"code": code}, Qt.ItemDataRole.UserRole)
+        # Store a short code in DisplayRole and a dict in UserRole so the
+        # difference is obvious when switching output roles.
+        it.setData(code, int(Qt.ItemDataRole.DisplayRole))
+        it.setData({"code": code}, int(Qt.ItemDataRole.UserRole))
+        # Make the item user-checkable like MultiSelectComboBox.addItem does
+        it.setFlags(
+            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
+        )
+        it.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         model.appendRow(it)
 
     for text, code in [("Apple", "APL"), ("Banana", "BAN"), ("Orange", "ORG")]:
@@ -77,6 +85,8 @@ def main():
 
     window.setCentralWidget(central)
     window.resize(560, 320)
+    # Initialize labels before showing
+    refresh_labels()
     window.show()
 
     app.exec()
