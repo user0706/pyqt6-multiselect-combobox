@@ -894,6 +894,70 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._endBulkUpdate()
 
+    def setCurrentDataValues(self, values: List[Any]) -> None:
+        """Select items whose data matches any of the provided values.
+
+        This API avoids delimiter parsing and matches strictly by item data
+        stored at Qt.UserRole (the role used by addItem/addItems).
+
+        Args:
+            values (list[Any]): Data values to select.
+
+        Returns:
+            None
+        """
+        try:
+            to_select = set(values)
+        except Exception:
+            # Fallback to list iteration if values is not hashable as a set
+            to_select = list(values)  # type: ignore[assignment]
+
+        self._beginBulkUpdate()
+        try:
+            for i in range(self._firstOptionRow(), self.model().rowCount()):
+                item = self.model().item(i)
+                data_val = item.data(int(Qt.ItemDataRole.UserRole))
+                match = (data_val in to_select) if isinstance(to_select, set) else (data_val in to_select)
+                if match:
+                    if self._canSelectMore(1):
+                        item.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+                    else:
+                        self._notifyLimitReached()
+                        item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+                else:
+                    item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        finally:
+            self._endBulkUpdate()
+
+    def setCurrentTexts(self, texts: List[str]) -> None:
+        """Select items whose text matches any of the provided strings.
+
+        This API avoids delimiter parsing and matches strictly by item text.
+
+        Args:
+            texts (list[str]): Item texts to select. Matching is exact and
+                case-sensitive (use your own normalization if needed).
+
+        Returns:
+            None
+        """
+        to_select = set(texts)
+        self._beginBulkUpdate()
+        try:
+            for i in range(self._firstOptionRow(), self.model().rowCount()):
+                item = self.model().item(i)
+                match = item.text() in to_select
+                if match:
+                    if self._canSelectMore(1):
+                        item.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+                    else:
+                        self._notifyLimitReached()
+                        item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+                else:
+                    item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        finally:
+            self._endBulkUpdate()
+
     def findText(self, text: str, flags: Qt.MatchFlag = Qt.MatchFlag.MatchExactly) -> int:  # type: ignore[override]
         """Find the index of the first item whose text matches.
 

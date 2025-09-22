@@ -1255,3 +1255,33 @@ def test_programmatic_selection_can_include_disabled(qapp):
     # Programmatically set selection -> disabled item should be checked
     c.setCurrentIndexes([1])
     assert c.getCurrentIndexes() == [1]
+
+
+# --- New explicit selection APIs: setCurrentTexts / setCurrentDataValues ---
+
+def test_set_current_texts_and_data_values_basic(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"], ["da", "db", "dc"])
+    # By texts
+    c.setCurrentTexts(["A", "C"])
+    assert c.getCurrentIndexes() == [0, 2]
+    # By data
+    c.clearSelection()
+    c.setCurrentDataValues(["db"])  # matches B
+    assert c.getCurrentIndexes() == [1]
+
+
+def test_set_current_texts_respects_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.setCurrentTexts(["A", "B", "C"])  # ask for 3
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_set_current_data_values_respects_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"], ["da", "db", "dc"])  # 3 items
+    c.setMaxSelectionCount(1)
+    c.setCurrentDataValues(["da", "db"])  # ask for 2
+    assert len(c.getCurrentIndexes()) == 1
