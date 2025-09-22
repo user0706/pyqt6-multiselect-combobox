@@ -37,6 +37,9 @@ def test_defaults(combo: MultiSelectComboBox):
     assert combo.getDisplayDelimiter() == ", "
     assert combo.isDuplicatesEnabled() is True
     assert combo.isSelectAllEnabled() is False
+    # Summarization defaults
+    assert combo.getSummaryThreshold() is None
+    assert combo.getSummaryMode() == "leading"
 
 
 def test_add_item_and_items(qapp):
@@ -70,6 +73,64 @@ def test_set_current_indexes_and_current_data_text(combo: MultiSelectComboBox):
     # Change display_type to text and verify currentText joining
     combo.setDisplayType("text")
     assert combo.currentText() == "A, C"
+
+
+# --- Summarization feature ---
+
+def test_summary_leading_threshold_basic(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["Apple", "Banana", "Cherry", "Date"])  # 4 items
+    c.setSummaryThreshold(2)  # show up to 2, then summarize
+    c.setCurrentIndexes([0, 1])
+    assert c.currentText() == "Apple, Banana"  # no summary when <= threshold
+    c.setCurrentIndexes([0, 1, 2])
+    # Default leading format uses ellipsis + "more"
+    assert "Apple, Banana" in c.currentText()
+    assert "+1 more" in c.currentText()
+
+
+def test_summary_count_mode(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setSummaryMode("count")
+    c.setSummaryThreshold(0)  # always summarize
+    c.setCurrentIndexes([0])
+    assert c.currentText() == "1 selected"
+    c.setCurrentIndexes([0, 2])
+    assert c.currentText() == "2 selected"
+
+
+def test_summary_count_respects_threshold_show_full_when_under(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setSummaryMode("count")
+    c.setSummaryThreshold(3)
+    c.setCurrentIndexes([0, 1])
+    # count mode with threshold>0 should show full list when count <= threshold
+    assert c.currentText() == "A, B"
+    # Exceed threshold -> summarize
+    c.setCurrentIndexes([0, 1, 2])
+    assert c.currentText() == "3 selected"
+
+
+def test_summary_custom_formats(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["A", "B", "C", "D"])  # 4 items
+    c.setSummaryThreshold(1)
+    c.setSummaryMode("leading")
+    c.setSummaryFormat(leading="{shown} and {more} others")
+    c.setCurrentIndexes([0, 1, 2])
+    assert c.currentText() == "A and 2 others"
+    # Count format
+    c.setSummaryMode("count")
+    c.setSummaryFormat(count="Selected: {count}")
+    c.setSummaryThreshold(0)
+    c.setCurrentIndexes([0, 1, 2, 3])
+    assert c.currentText() == "Selected: 4"
 
 
 def test_set_current_text_with_string_and_list(combo: MultiSelectComboBox):

@@ -76,6 +76,16 @@ class MultiSelectComboBox(QComboBox):
         self.setDisplayType("text")
         self.setDisplayDelimiter(",")
 
+        # Optional summarization feature (disabled by default)
+        # When a threshold is set (int >= 0), the display can be summarized
+        # using either a count ("{count} selected") or a leading list with
+        # a "+{more} more" suffix. None disables summarization.
+        self._summaryThreshold: Optional[int] = None
+        self._summaryMode: str = "leading"  # "leading" or "count"
+        # Default formats; apply only when mode requires them
+        self._summaryCountFormat: str = "{count} selected"
+        self._summaryLeadingFormat: str = "{shown} … +{more} more"
+
         # When True, keep the widget tooltip in sync with the full (non-elided)
         # selection text so users can hover to view the entire selection.
         self._elideToolTipEnabled: bool = True
@@ -527,10 +537,8 @@ class MultiSelectComboBox(QComboBox):
             rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
             texts = [self.typeSelection(i, display_type) for i in rows]
 
-            if texts:
-                text = delimiter.join(str(t) for t in texts)
-            else:
-                text = self.placeholderText if hasattr(self, 'placeholderText') else ""
+            # Apply optional summarization for display text
+            text = self._buildDisplayText(texts, delimiter)
 
             # Also set native placeholder for better styling when empty
             if not texts:
@@ -739,9 +747,96 @@ class MultiSelectComboBox(QComboBox):
         delimiter = self.getDisplayDelimiter()
         rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
         parts = [self.typeSelection(i, display_type) for i in rows]
-        if parts:
+        return self._buildDisplayText(parts, delimiter)
+
+    # --- Optional summarization API ---
+    def setSummaryThreshold(self, threshold: Optional[int]) -> None:
+        """Set the number of items to show before summarizing.
+
+        - None disables summarization (default behavior).
+        - 0 means always summarize (even one selection).
+        - N>0 shows up to N items, beyond that summarizes.
+        """
+        if threshold is None:
+            self._summaryThreshold = None
+        else:
+            if threshold < 0:
+                raise ValueError("Summary threshold must be >= 0 or None")
+            self._summaryThreshold = int(threshold)
+        self.updateText()
+
+    def getSummaryThreshold(self) -> Optional[int]:
+        """Return the current summarization threshold or None if disabled."""
+        return self._summaryThreshold
+
+    def setSummaryMode(self, mode: str) -> None:
+        """Set summarization mode: 'count' or 'leading'.
+
+        - 'count': shows text based on _summaryCountFormat (e.g., "{count} selected").
+        - 'leading': shows first N items then _summaryLeadingFormat (e.g., "A, B … +2 more").
+        """
+        if mode not in ("count", "leading"):
+            raise ValueError("Summary mode must be 'count' or 'leading'")
+        self._summaryMode = mode
+        self.updateText()
+
+    def getSummaryMode(self) -> str:
+        """Return current summarization mode."""
+        return self._summaryMode
+
+    def setSummaryFormat(self, *, count: Optional[str] = None, leading: Optional[str] = None) -> None:
+        """Customize summary text formats.
+
+        Args:
+            count: Format for count mode. Available fields: {count}.
+            leading: Format for leading mode. Available fields: {shown}, {more}.
+        """
+        if count is not None:
+            # sanity check
+            if "{count}" not in count:
+                raise ValueError("count format must include '{count}' placeholder")
+            self._summaryCountFormat = count
+        if leading is not None:
+            if "{shown}" not in leading or "{more}" not in leading:
+                raise ValueError("leading format must include '{shown}' and '{more}' placeholders")
+            self._summaryLeadingFormat = leading
+        self.updateText()
+
+    def getSummaryFormat(self) -> Tuple[str, str]:
+        """Return (count_format, leading_format)."""
+        return self._summaryCountFormat, self._summaryLeadingFormat
+
+    def _buildDisplayText(self, parts: List[Any], delimiter: str) -> str:
+        """Build the display text from selected parts with optional summarization."""
+        # No selection: return placeholder
+        if not parts:
+            return self.placeholderText if hasattr(self, 'placeholderText') else ""
+
+        # If summarization is disabled, return full joined text
+        if self._summaryThreshold is None:
             return delimiter.join(str(p) for p in parts)
-        return self.placeholderText if hasattr(self, 'placeholderText') else ""
+
+        # Summarization enabled
+        count = len(parts)
+        threshold = int(self._summaryThreshold)
+
+        if self._summaryMode == "count":
+            # Always summarize when threshold is not None and count >= threshold
+            # If threshold>0 and count < threshold, show full list
+            if threshold > 0 and count < threshold:
+                return delimiter.join(str(p) for p in parts)
+            return self._summaryCountFormat.format(count=count)
+
+        # leading mode
+        if threshold == 0:
+            shown_list: List[str] = []
+        else:
+            shown_list = [str(p) for p in parts[:threshold]]
+        more = max(0, count - threshold)
+        if more <= 0:
+            return delimiter.join(shown_list)
+        shown = delimiter.join(shown_list)
+        return self._summaryLeadingFormat.format(shown=shown, more=more)
 
     def setCurrentText(self, value: Iterable[str] | str) -> None:  # type: ignore[override]
         """Select items matching the provided value.
