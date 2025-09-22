@@ -1,6 +1,6 @@
 from typing import Any, Iterable, List, Optional, Tuple
 
-from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate
+from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate, QLineEdit
 from PyQt6.QtGui import QStandardItem, QPalette, QFontMetrics
 from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QObject, QTimerEvent, QTimer
 
@@ -75,6 +75,11 @@ class MultiSelectComboBox(QComboBox):
 
         # Reentrancy guard for updateText
         self._updatingText = False
+
+        # Optional filter UI inside the popup
+        self._filterEnabled: bool = False
+        self._filterEdit: Optional[QLineEdit] = None
+        self._filterTopMargin: int = 0
 
         # Initialize caches
         self._rebuildCheckedCache()
@@ -174,6 +179,8 @@ class MultiSelectComboBox(QComboBox):
         # Rebuild caches and refresh UI to reflect the new model state
         self._rebuildCheckedCache()
         self._performCoalescedUpdate()
+        # Reapply filter if enabled to the new model
+        self._reapplyFilterIfNeeded()
 
     def _connectModelSignals(self, m) -> None:
         try:
@@ -229,6 +236,10 @@ class MultiSelectComboBox(QComboBox):
             else:
                 self.showPopup()
             return True
+        # Keep filter UI positioned on view resize/move
+        if self._filterEnabled and obj in (self.view(), self.view().viewport()):
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.Move):
+                self._positionFilterUi()
         # Keyboard support when popup is open: Space/Enter toggles highlighted row
         if obj in (self.view(), self.view().viewport()) and event.type() == QEvent.Type.KeyPress:
             key = event.key()
@@ -286,9 +297,112 @@ class MultiSelectComboBox(QComboBox):
                 return True
         return False
 
+    # --- In-popup filter support ---
+    def setFilterEnabled(self, enabled: bool) -> None:
+        """Enable or disable a search/filter field inside the popup.
+
+        When enabled, a small QLineEdit is shown above the list and filters
+        visible rows on-the-fly by item text (case-insensitive contains).
+        """
+        self._filterEnabled = bool(enabled)
+        if not enabled:
+            # Tear down UI and clear hiding if disabling
+            self._teardownFilterUi()
+            self._clearRowHiding()
+        else:
+            # Lazily create on next popup show
+            pass
+
+    def isFilterEnabled(self) -> bool:
+        """Return whether the in-popup filter is enabled."""
+        return self._filterEnabled
+
+    def _ensureFilterUi(self) -> None:
+        if self._filterEdit is not None:
+            return
+        try:
+            v = self.view()
+        except Exception:
+            return
+        self._filterEdit = QLineEdit(v)
+        self._filterEdit.setPlaceholderText("Filter...")
+        self._filterEdit.textChanged.connect(self._applyTextFilter)
+        # Compute a comfortable height based on font metrics
+        fm = QFontMetrics(self._filterEdit.font())
+        h = fm.height() + 10
+        self._filterTopMargin = h + 2
+        try:
+            v.setViewportMargins(0, self._filterTopMargin, 0, 0)
+        except Exception:
+            pass
+        # Ensure clicks in the filter do not propagate to the list view
+        self._filterEdit.installEventFilter(self)
+
+    def _positionFilterUi(self) -> None:
+        if not self._filterEnabled or self._filterEdit is None:
+            return
+        v = self.view()
+        # Keep viewport top margin in sync (some styles reset margins)
+        try:
+            v.setViewportMargins(0, self._filterTopMargin, 0, 0)
+        except Exception:
+            pass
+        # Place the edit at the very top inside the view
+        w = v.viewport().width() if v.viewport() is not None else v.width()
+        self._filterEdit.setGeometry(1, 1, max(0, w - 2), self._filterTopMargin - 2)
+
+    def _teardownFilterUi(self) -> None:
+        if self._filterEdit is None:
+            # Also clear viewport margins
+            try:
+                self.view().setViewportMargins(0, 0, 0, 0)
+            except Exception:
+                pass
+            return
+        try:
+            self.view().setViewportMargins(0, 0, 0, 0)
+        except Exception:
+            pass
+        try:
+            self._filterEdit.deleteLater()
+        except Exception:
+            pass
+        self._filterEdit = None
+        self._filterTopMargin = 0
+
+    def _applyTextFilter(self, pattern: str) -> None:
+        # Hide rows that do not match the filter; keep Select All (if present) visible
+        patt = (pattern or "").strip()
+        casefold = patt.casefold()
+        m = self.model()
+        first = self._firstOptionRow()
+        for row in range(0, m.rowCount()):
+            if row < first:
+                # Always show pseudo-rows above options (e.g., Select All)
+                self.view().setRowHidden(row, False)
+                continue
+            item = m.item(row)
+            if not patt:
+                self.view().setRowHidden(row, False)
+            else:
+                text = item.text() if item is not None else ""
+                self.view().setRowHidden(row, casefold not in text.casefold())
+
+    def _clearRowHiding(self) -> None:
+        try:
+            m = self.model()
+            for row in range(0, m.rowCount()):
+                self.view().setRowHidden(row, False)
+        except Exception:
+            pass
+
     def showPopup(self) -> None:
         """Show the combo box popup.
         """
+        # Ensure filter UI is prepared before showing
+        if self._filterEnabled:
+            self._ensureFilterUi()
+            self._positionFilterUi()
         super().showPopup()
         self.closeOnLineEditClick = True
 
@@ -803,6 +917,7 @@ class MultiSelectComboBox(QComboBox):
             return
         self._rebuildCheckedCache()
         self._scheduleCoalescedUpdate()
+        self._reapplyFilterIfNeeded()
 
     def _onRowsRemoved(self, parent, start: int, end: int) -> None:
         # Rebuild cache as rows shift; then schedule update
@@ -810,6 +925,7 @@ class MultiSelectComboBox(QComboBox):
             return
         self._rebuildCheckedCache()
         self._scheduleCoalescedUpdate()
+        self._reapplyFilterIfNeeded()
 
     def _onModelReset(self) -> None:
         # Model structure changed drastically
@@ -817,12 +933,21 @@ class MultiSelectComboBox(QComboBox):
             return
         self._rebuildCheckedCache()
         self._scheduleCoalescedUpdate()
+        self._reapplyFilterIfNeeded()
 
     def _scheduleCoalescedUpdate(self) -> None:
         if self._updateScheduled:
             return
         self._updateScheduled = True
         QTimer.singleShot(0, self._performCoalescedUpdate)
+
+    def _reapplyFilterIfNeeded(self) -> None:
+        # Reapply filtering after model changes
+        try:
+            if self._filterEnabled and self._filterEdit is not None:
+                self._applyTextFilter(self._filterEdit.text())
+        except Exception:
+            pass
 
     def _performCoalescedUpdate(self) -> None:
         self._updateScheduled = False

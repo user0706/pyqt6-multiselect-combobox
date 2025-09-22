@@ -458,6 +458,108 @@ def test_runtime_set_model_and_role_switch(qapp):
     assert c.getCurrentIndexes() == [0]
 
 
+# --- In-popup filter tests ---
+
+def test_filter_enable_disable_and_row_hiding(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["Alpha", "Beta", "Gamma", "Alphabet"])  # 4 items
+    # Initially disabled
+    assert c.isFilterEnabled() is False
+    c.setFilterEnabled(True)
+    assert c.isFilterEnabled() is True
+
+    # Show to create the popup view and filter UI
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # The private filter edit should be present; set text to filter
+    assert getattr(c, "_filterEdit") is not None
+    c._filterEdit.setText("Al")  # matches Alpha and Alphabet
+    qapp.processEvents()
+
+    # Verify hidden rows: expect rows with "Alpha" and "Alphabet" visible
+    view = c.view()
+    # Determine indices by item text to avoid relying on order
+    texts = [c.model().item(i).text() for i in range(c.model().rowCount())]
+    idx_alpha = texts.index("Alpha")
+    idx_alphabet = texts.index("Alphabet")
+    idx_beta = texts.index("Beta")
+    idx_gamma = texts.index("Gamma")
+    assert view.isRowHidden(idx_alpha) is False
+    assert view.isRowHidden(idx_alphabet) is False
+    assert view.isRowHidden(idx_beta) is True
+    assert view.isRowHidden(idx_gamma) is True
+
+    # Clearing filter shows all
+    c._filterEdit.clear()
+    qapp.processEvents()
+    for row in range(c.model().rowCount()):
+        assert view.isRowHidden(row) is False
+
+    # Disable filter tears down UI and clears hiding
+    c.setFilterEnabled(False)
+    qapp.processEvents()
+    assert getattr(c, "_filterEdit") is None
+    for row in range(c.model().rowCount()):
+        assert view.isRowHidden(row) is False
+
+
+def test_filter_persists_across_model_changes(qapp):
+    from PyQt6.QtGui import QStandardItem
+
+    c = MultiSelectComboBox()
+    c.addItems(["One", "Two", "Three"])  # 3 items
+    c.setFilterEnabled(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Apply a filter that matches only "Two"
+    c._filterEdit.setText("wo")
+    qapp.processEvents()
+    view = c.view()
+    texts = [c.model().item(i).text() for i in range(c.model().rowCount())]
+    idx_one = texts.index("One")
+    idx_two = texts.index("Two")
+    idx_three = texts.index("Three")
+    assert view.isRowHidden(idx_one) is True
+    assert view.isRowHidden(idx_two) is False
+    assert view.isRowHidden(idx_three) is True
+
+    # Insert a new row that matches the filter ("Twofold"); filter should reapply
+    it = QStandardItem("Twofold")
+    it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+    it.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+    c.model().appendRow(it)
+    qapp.processEvents()
+
+    texts2 = [c.model().item(i).text() for i in range(c.model().rowCount())]
+    idx_twofold = texts2.index("Twofold")
+    assert view.isRowHidden(idx_twofold) is False
+
+
+def test_filter_keeps_select_all_visible(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setSelectAllEnabled(True)
+    c.setFilterEnabled(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    # Apply a filter that matches none of the options
+    c._filterEdit.setText("ZZZ")
+    qapp.processEvents()
+    # Row 0 is Select All -> should remain visible
+    assert c.view().isRowHidden(0) is False
+    # All option rows should be hidden
+    for row in range(1, c.model().rowCount()):
+        assert c.view().isRowHidden(row) is True
+
+
 def test_display_delimiter_with_embedded_spaces(qapp):
     c = MultiSelectComboBox()
     c.addItems(["A", "B"]) 
