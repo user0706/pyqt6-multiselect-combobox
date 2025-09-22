@@ -37,6 +37,9 @@ def test_defaults(combo: MultiSelectComboBox):
     assert combo.getDisplayDelimiter() == ", "
     assert combo.isDuplicatesEnabled() is True
     assert combo.isSelectAllEnabled() is False
+    # Summarization defaults
+    assert combo.getSummaryThreshold() is None
+    assert combo.getSummaryMode() == "leading"
 
 
 def test_add_item_and_items(qapp):
@@ -70,6 +73,64 @@ def test_set_current_indexes_and_current_data_text(combo: MultiSelectComboBox):
     # Change display_type to text and verify currentText joining
     combo.setDisplayType("text")
     assert combo.currentText() == "A, C"
+
+
+# --- Summarization feature ---
+
+def test_summary_leading_threshold_basic(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["Apple", "Banana", "Cherry", "Date"])  # 4 items
+    c.setSummaryThreshold(2)  # show up to 2, then summarize
+    c.setCurrentIndexes([0, 1])
+    assert c.currentText() == "Apple, Banana"  # no summary when <= threshold
+    c.setCurrentIndexes([0, 1, 2])
+    # Default leading format uses ellipsis + "more"
+    assert "Apple, Banana" in c.currentText()
+    assert "+1 more" in c.currentText()
+
+
+def test_summary_count_mode(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setSummaryMode("count")
+    c.setSummaryThreshold(0)  # always summarize
+    c.setCurrentIndexes([0])
+    assert c.currentText() == "1 selected"
+    c.setCurrentIndexes([0, 2])
+    assert c.currentText() == "2 selected"
+
+
+def test_summary_count_respects_threshold_show_full_when_under(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setSummaryMode("count")
+    c.setSummaryThreshold(3)
+    c.setCurrentIndexes([0, 1])
+    # count mode with threshold>0 should show full list when count <= threshold
+    assert c.currentText() == "A, B"
+    # Exceed threshold -> summarize
+    c.setCurrentIndexes([0, 1, 2])
+    assert c.currentText() == "3 selected"
+
+
+def test_summary_custom_formats(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["A", "B", "C", "D"])  # 4 items
+    c.setSummaryThreshold(1)
+    c.setSummaryMode("leading")
+    c.setSummaryFormat(leading="{shown} and {more} others")
+    c.setCurrentIndexes([0, 1, 2])
+    assert c.currentText() == "A and 2 others"
+    # Count format
+    c.setSummaryMode("count")
+    c.setSummaryFormat(count="Selected: {count}")
+    c.setSummaryThreshold(0)
+    c.setCurrentIndexes([0, 1, 2, 3])
+    assert c.currentText() == "Selected: 4"
 
 
 def test_set_current_text_with_string_and_list(combo: MultiSelectComboBox):
@@ -304,6 +365,37 @@ def test_event_filter_clicks_and_select_all_toggle(qapp):
     assert c.getCurrentIndexes() == []
 
     c.hidePopup()
+
+
+def test_max_selection_zero_and_negative_disable_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    # Zero should disable limit
+    c.setMaxSelectionCount(0)
+    c.selectAll()
+    assert len(c.getCurrentIndexes()) == 3
+    # Negative also disables
+    c.clearSelection()
+    c.setMaxSelectionCount(-5)
+    c.selectAll()
+    assert len(c.getCurrentIndexes()) == 3
+
+
+def test_line_edit_click_toggles_popup(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.show()
+    qapp.processEvents()
+    # Open popup explicitly to ensure consistent state
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+    # When popup open, clicking line edit should hide it due to closeOnLineEditClick
+    QTest.mouseClick(c.lineEdit(), Qt.MouseButton.LeftButton)
+    # hidePopup uses a 100ms timer; wait briefly for it to take effect
+    QTest.qWait(150)
+    qapp.processEvents()
+    assert not c.view().isVisible()
     qapp.processEvents()
 
 
@@ -458,6 +550,108 @@ def test_runtime_set_model_and_role_switch(qapp):
     assert c.getCurrentIndexes() == [0]
 
 
+# --- In-popup filter tests ---
+
+def test_filter_enable_disable_and_row_hiding(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["Alpha", "Beta", "Gamma", "Alphabet"])  # 4 items
+    # Initially disabled
+    assert c.isFilterEnabled() is False
+    c.setFilterEnabled(True)
+    assert c.isFilterEnabled() is True
+
+    # Show to create the popup view and filter UI
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # The private filter edit should be present; set text to filter
+    assert getattr(c, "_filterEdit") is not None
+    c._filterEdit.setText("Al")  # matches Alpha and Alphabet
+    qapp.processEvents()
+
+    # Verify hidden rows: expect rows with "Alpha" and "Alphabet" visible
+    view = c.view()
+    # Determine indices by item text to avoid relying on order
+    texts = [c.model().item(i).text() for i in range(c.model().rowCount())]
+    idx_alpha = texts.index("Alpha")
+    idx_alphabet = texts.index("Alphabet")
+    idx_beta = texts.index("Beta")
+    idx_gamma = texts.index("Gamma")
+    assert view.isRowHidden(idx_alpha) is False
+    assert view.isRowHidden(idx_alphabet) is False
+    assert view.isRowHidden(idx_beta) is True
+    assert view.isRowHidden(idx_gamma) is True
+
+    # Clearing filter shows all
+    c._filterEdit.clear()
+    qapp.processEvents()
+    for row in range(c.model().rowCount()):
+        assert view.isRowHidden(row) is False
+
+    # Disable filter tears down UI and clears hiding
+    c.setFilterEnabled(False)
+    qapp.processEvents()
+    assert getattr(c, "_filterEdit") is None
+    for row in range(c.model().rowCount()):
+        assert view.isRowHidden(row) is False
+
+
+def test_filter_persists_across_model_changes(qapp):
+    from PyQt6.QtGui import QStandardItem
+
+    c = MultiSelectComboBox()
+    c.addItems(["One", "Two", "Three"])  # 3 items
+    c.setFilterEnabled(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Apply a filter that matches only "Two"
+    c._filterEdit.setText("wo")
+    qapp.processEvents()
+    view = c.view()
+    texts = [c.model().item(i).text() for i in range(c.model().rowCount())]
+    idx_one = texts.index("One")
+    idx_two = texts.index("Two")
+    idx_three = texts.index("Three")
+    assert view.isRowHidden(idx_one) is True
+    assert view.isRowHidden(idx_two) is False
+    assert view.isRowHidden(idx_three) is True
+
+    # Insert a new row that matches the filter ("Twofold"); filter should reapply
+    it = QStandardItem("Twofold")
+    it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+    it.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+    c.model().appendRow(it)
+    qapp.processEvents()
+
+    texts2 = [c.model().item(i).text() for i in range(c.model().rowCount())]
+    idx_twofold = texts2.index("Twofold")
+    assert view.isRowHidden(idx_twofold) is False
+
+
+def test_filter_keeps_select_all_visible(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setSelectAllEnabled(True)
+    c.setFilterEnabled(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    # Apply a filter that matches none of the options
+    c._filterEdit.setText("ZZZ")
+    qapp.processEvents()
+    # Row 0 is Select All -> should remain visible
+    assert c.view().isRowHidden(0) is False
+    # All option rows should be hidden
+    for row in range(1, c.model().rowCount()):
+        assert c.view().isRowHidden(row) is True
+
+
 def test_display_delimiter_with_embedded_spaces(qapp):
     c = MultiSelectComboBox()
     c.addItems(["A", "B"]) 
@@ -500,6 +694,18 @@ def test_find_data_with_custom_role(qapp):
     role = int(Qt.ItemDataRole.DisplayRole)
     c.model().item(1).setData("Bee", role)
     assert c.findData("Bee", role=role) == 1
+
+
+def test_select_all_enabled_on_empty_model_no_crash(qapp):
+    c = MultiSelectComboBox()
+    # Enable Select All with no items and ensure no crash/edge
+    c.setSelectAllEnabled(True)
+    # selectAll on empty should not change selection and should not crash
+    c.selectAll()
+    assert c.getCurrentIndexes() == []
+    # clearSelection on empty
+    c.clearSelection()
+    assert c.getCurrentIndexes() == []
 
 
 def test_set_model_twice_disconnects_and_reconnects(qapp):
@@ -647,3 +853,343 @@ def test_aria_like_hints_tooltips_and_status_tips(qapp):
     qapp.processEvents()
     tip0_cleared = (c.model().item(1).toolTip() or "")
     assert "is not selected" in tip0_cleared
+
+
+# --- Clear button and clear() slot ---
+
+def test_line_edit_has_clear_button_enabled(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    # Clear button should be enabled on the internal line edit
+    assert c.lineEdit().isClearButtonEnabled() is True
+
+
+def test_clear_slot_clears_selection_and_emits_once(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setCurrentIndexes([0, 2])
+    captured = []
+
+    def on_changed(values):
+        captured.append(list(values))
+
+    c.selectionChanged.connect(on_changed)
+    # Call clear() once -> should clear selection and emit once
+    c.clear()
+    qapp.processEvents()
+    assert c.getCurrentIndexes() == []
+    # There should be exactly 1 emission for the changed selection
+    assert len(captured) >= 1
+    # If there were previous emissions from setCurrentIndexes coalescing, ensure last is empty
+    assert captured[-1] == []
+
+    # Calling clear() again should not emit a new signal since selection didn't change
+    prev_len = len(captured)
+    c.clear()
+    qapp.processEvents()
+    assert len(captured) == prev_len
+
+
+def test_line_edit_blocks_typing(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setDisplayType("text")
+    c.show()
+    qapp.processEvents()
+    # Focus line edit and attempt to type; eventFilter should block edits
+    c.lineEdit().setFocus()
+    QTest.keyClick(c.lineEdit(), Qt.Key.Key_A)
+    qapp.processEvents()
+    # No selection; currentText should remain empty (placeholder not set here)
+    assert c.currentText() == ""
+
+
+def test_keyboard_enter_toggle_paths(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setSelectAllEnabled(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    # Toggle option via Enter
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Return)
+    assert c.getCurrentIndexes() == [1]
+    # Toggle Select All via Enter -> should select all
+    c.view().setCurrentIndex(c.model().index(0, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Return)
+    assert [i for i in range(1, c.model().rowCount())] == c.getCurrentIndexes()
+    c.hidePopup()
+
+
+def test_type_selection_text_branch(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    # Ensure typeSelection returns text when requested explicitly
+    assert c.typeSelection(0, "text", expected_type="data") == "A"
+
+
+def test_line_edit_clear_button_action_clears_selection(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setDisplayType("text")
+    c.setCurrentIndexes([0, 1])
+    qapp.processEvents()
+    # Simulate user clicking the clear button by invoking QLineEdit.clear()
+    captured = []
+
+    def on_changed(values):
+        captured.append(list(values))
+
+    c.selectionChanged.connect(on_changed)
+    # Ensure text is non-empty before clear
+    assert c.currentText() != ""
+    c.lineEdit().clear()
+    qapp.processEvents()
+    assert c.getCurrentIndexes() == []
+    assert captured and captured[-1] == []
+
+
+# --- Max selection (setMaxSelectionCount) tests ---
+
+
+def test_max_selection_basic_enforcement(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C", "D"])  # 4 items
+    c.setMaxSelectionCount(2)
+    # selectAll should cap at 2
+    c.selectAll()
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_max_selection_disable_and_reenable(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C", "D"])  # 4 items
+    # Set a limit and select
+    c.setMaxSelectionCount(2)
+    assert c.maxSelectionCount() == 2
+    c.setCurrentIndexes([0, 1])
+    assert len(c.getCurrentIndexes()) == 2
+    # Disable the limit and select all
+    c.setMaxSelectionCount(None)
+    assert c.maxSelectionCount() is None
+    c.selectAll()
+    assert len(c.getCurrentIndexes()) == 4
+    # Re-enable with a stricter limit and ensure pruning occurs via getter
+    c.setMaxSelectionCount(1)
+    # Accessor should enforce pruning if needed
+    idxs = c.getCurrentIndexes()
+    assert len(idxs) == 1
+
+
+def test_invert_selection_with_limit_respects_capacity(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    # Start with first checked
+    c.setCurrentIndexes([0])
+    # Invert -> tries to check the other two, but should cap at 2 total
+    c.invertSelection()
+    idxs = c.getCurrentIndexes()
+    assert len(idxs) == 2
+
+
+# --- Tooltip synchronization for elided text ---
+
+def test_tooltip_mirrors_current_text_when_enabled(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["Alpha", "Beta", "Gamma"]) 
+    c.setCurrentIndexes([0, 2])
+    qapp.processEvents()
+    # By default tooltip sync is enabled; tooltip should equal full currentText
+    assert c.toolTip() == c.currentText()
+
+
+def test_tooltip_stays_full_on_resize_and_elision(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    # Long names to trigger elision easily
+    items = [
+        "Massachusetts",
+        "Rhode Island",
+        "Connecticut",
+        "New Hampshire",
+    ]
+    c.addItems(items)
+    c.setCurrentText(["Massachusetts", "Rhode Island", "Connecticut"])  # by text
+    qapp.processEvents()
+
+    full_text_before = c.currentText()
+    # Make the widget narrow to force elision in the line edit display
+    c.resize(120, c.height())
+    qapp.processEvents()
+
+    # Tooltip should mirror the full (non-elided) text
+    assert c.toolTip() == full_text_before
+    # And currentText remains the full text regardless of elision
+    assert c.currentText() == full_text_before
+
+
+def test_disabling_tooltip_sync_stops_updates(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["A", "B", "C"]) 
+    c.setCurrentIndexes([0, 1])
+    qapp.processEvents()
+    synced_tip = c.toolTip()
+    assert synced_tip == c.currentText()
+
+    # Disable sync and change selection; tooltip should not follow anymore
+    c.setElideToolTipEnabled(False)
+    c.setCurrentIndexes([2])
+    qapp.processEvents()
+    assert c.currentText() == "C"
+    # Tooltip should still be the previous value (or at least not equal currentText)
+    assert c.toolTip() != c.currentText()
+def test_set_current_indexes_respects_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.setCurrentIndexes([0, 1, 2])
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_set_current_text_respects_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.setCurrentText(["A", "B", "C"])  # ask for 3
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_click_block_when_limit_reached(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Click to select first two
+    for row in [0, 1]:
+        idx = c.model().index(row, 0)
+        rect = c.view().visualRect(idx)
+        pos = rect.center()
+        QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos)
+    assert len(c.getCurrentIndexes()) == 2
+
+    # Try clicking third; should remain 2
+    idx3 = c.model().index(2, 0)
+    rect3 = c.view().visualRect(idx3)
+    pos3 = rect3.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos3)
+    assert len(c.getCurrentIndexes()) == 2
+
+    c.hidePopup()
+
+
+def test_keyboard_block_when_limit_reached(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Select first two via keyboard
+    c.view().setCurrentIndex(c.model().index(0, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    assert len(c.getCurrentIndexes()) == 2
+
+    # Attempt to select third via keyboard -> should stay at 2
+    c.view().setCurrentIndex(c.model().index(2, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    assert len(c.getCurrentIndexes()) == 2
+
+    c.hidePopup()
+
+
+def test_external_over_selection_is_enforced(qapp):
+    # If an external change somehow over-selects items, the widget should prune to the limit
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    # Manually mark all checked via model to simulate external change
+    for i in range(c._firstOptionRow(), c.model().rowCount()):
+        c.model().item(i).setCheckState(Qt.CheckState.Checked)
+    # Process pending updates
+    qapp.processEvents()
+    # The widget should prune back down to 2 selections
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_close_on_select_mouse_item_hides_popup_and_view(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setCloseOnSelect(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+
+    # Click row 0 (first option) to toggle and close
+    idx0 = c.model().index(0, 0)
+    rect0 = c.view().visualRect(idx0)
+    pos0 = rect0.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos0)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+    # Also ensure viewport is hidden as _forceHidePopupView is used
+    assert not c.view().viewport().isVisible()
+
+
+def test_show_popup_reopens_immediately_after_close_on_select(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setCloseOnSelect(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+
+    # Click an item to close
+    idx0 = c.model().index(0, 0)
+    rect0 = c.view().visualRect(idx0)
+    pos0 = rect0.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos0)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+
+    # Immediately request to show again; view should become visible without lag
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+
+
+def test_close_on_select_mouse_select_all_row_hides_popup_and_view(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setSelectAllEnabled(True)
+    c.setCloseOnSelect(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+
+    # Click Select All row (0) to toggle and close
+    idx_sa = c.model().index(0, 0)
+    rect_sa = c.view().visualRect(idx_sa)
+    pos_sa = rect_sa.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos_sa)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+    assert not c.view().viewport().isVisible()

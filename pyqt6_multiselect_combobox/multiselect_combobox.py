@@ -1,7 +1,7 @@
 from typing import Any, Iterable, List, Optional, Tuple
 
-from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate
-from PyQt6.QtGui import QStandardItem, QPalette, QFontMetrics
+from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate, QLineEdit, QToolTip
+from PyQt6.QtGui import QStandardItem, QPalette, QFontMetrics, QCursor
 from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QObject, QTimerEvent, QTimer
 
 
@@ -36,6 +36,10 @@ class MultiSelectComboBox(QComboBox):
         self.output_type = "data"
         self.display_type = "data"
         self.duplicatesEnabled = True
+        # Maximum number of selectable items; None means unlimited
+        self._maxSelectionCount: Optional[int] = None
+        # Debounce guard to avoid spamming tooltip
+        self._lastLimitNotifyMs: int = 0
         self._lastSelectionSnapshot = []
         self._inBulkUpdate = False
         self._selectAllEnabled = False
@@ -50,7 +54,16 @@ class MultiSelectComboBox(QComboBox):
         self._outputDataRole: Qt.ItemDataRole = Qt.ItemDataRole.UserRole
 
         self.setEditable(True)
-        self.lineEdit().setReadOnly(True)
+        # Keep the editor editable so the native clear button can function,
+        # but we'll block typing via eventFilter to avoid user text edits.
+        self.lineEdit().setReadOnly(False)
+        # Surface a clear affordance on the read-only line edit; clicking the
+        # native clear button should clear the selection, not only the text.
+        try:
+            self.lineEdit().setClearButtonEnabled(True)
+        except Exception:
+            # Fallback for environments/styles that might not support it
+            pass
 
         palette = self.lineEdit().palette()
         palette.setBrush(
@@ -62,6 +75,20 @@ class MultiSelectComboBox(QComboBox):
         self.setOutputType("data")
         self.setDisplayType("text")
         self.setDisplayDelimiter(",")
+
+        # Optional summarization feature (disabled by default)
+        # When a threshold is set (int >= 0), the display can be summarized
+        # using either a count ("{count} selected") or a leading list with
+        # a "+{more} more" suffix. None disables summarization.
+        self._summaryThreshold: Optional[int] = None
+        self._summaryMode: str = "leading"  # "leading" or "count"
+        # Default formats; apply only when mode requires them
+        self._summaryCountFormat: str = "{count} selected"
+        self._summaryLeadingFormat: str = "{shown} … +{more} more"
+
+        # When True, keep the widget tooltip in sync with the full (non-elided)
+        # selection text so users can hover to view the entire selection.
+        self._elideToolTipEnabled: bool = True
 
         # Connect to current model's signals
         self._connectModelSignals(self.model())
@@ -76,11 +103,24 @@ class MultiSelectComboBox(QComboBox):
         # Reentrancy guard for updateText
         self._updatingText = False
 
+        # Optional filter UI inside the popup
+        self._filterEnabled: bool = False
+        self._filterEdit: Optional[QLineEdit] = None
+        self._filterTopMargin: int = 0
+
         # Initialize caches
         self._rebuildCheckedCache()
 
         # Set initial accessible names for screen readers
         self._updateAccessibilityLabels()
+
+        # If the user clicks the clear button, QLineEdit clears its text.
+        # Detect that user action via textChanged when not in a programmatic
+        # update and clear the selection once.
+        try:
+            self.lineEdit().textChanged.connect(self._onLineEditTextChanged)
+        except Exception:
+            pass
 
     def setOutputType(self, output_type: str) -> None:
         """Set the output type for the combo box.
@@ -151,6 +191,21 @@ class MultiSelectComboBox(QComboBox):
         """
         return self.display_delimiter
 
+    def setElideToolTipEnabled(self, enabled: bool) -> None:
+        """Enable or disable tooltip synchronization with the full selection text.
+
+        When enabled, the widget's tooltip is updated to the full, non-elided
+        joined text built by updateText()/currentText(). This allows users to
+        hover and see the entire selection when the line edit display is elided.
+        """
+        self._elideToolTipEnabled = bool(enabled)
+        # Refresh immediately so current tooltip reflects the new preference
+        self.updateText()
+
+    def isElideToolTipEnabled(self) -> bool:
+        """Return whether tooltip synchronization for elided text is enabled."""
+        return self._elideToolTipEnabled
+
     def resizeEvent(self, event) -> None:
         """Resize event handler.
 
@@ -174,6 +229,8 @@ class MultiSelectComboBox(QComboBox):
         # Rebuild caches and refresh UI to reflect the new model state
         self._rebuildCheckedCache()
         self._performCoalescedUpdate()
+        # Reapply filter if enabled to the new model
+        self._reapplyFilterIfNeeded()
 
     def _connectModelSignals(self, m) -> None:
         try:
@@ -229,6 +286,15 @@ class MultiSelectComboBox(QComboBox):
             else:
                 self.showPopup()
             return True
+        # Block keyboard edits in the line edit while allowing the clear button
+        # to function (the clear button triggers a textChanged("") we handle).
+        if obj == self.lineEdit() and event.type() == QEvent.Type.KeyPress:
+            # Eat key presses to prevent manual typing into the line edit
+            return True
+        # Keep filter UI positioned on view resize/move
+        if self._filterEnabled and obj in (self.view(), self.view().viewport()):
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.Move):
+                self._positionFilterUi()
         # Keyboard support when popup is open: Space/Enter toggles highlighted row
         if obj in (self.view(), self.view().viewport()) and event.type() == QEvent.Type.KeyPress:
             key = event.key()
@@ -247,7 +313,10 @@ class MultiSelectComboBox(QComboBox):
                         item = self.model().itemFromIndex(index)
                         state = item.data(Qt.ItemDataRole.CheckStateRole)
                         new_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
-                        item.setData(new_state, Qt.ItemDataRole.CheckStateRole)
+                        if new_state == Qt.CheckState.Checked and not self._canSelectMore(1):
+                            self._notifyLimitReached()
+                        else:
+                            item.setData(new_state, Qt.ItemDataRole.CheckStateRole)
                         self._syncSelectAllState()
                         self._emitSelectionIfChanged()
                     if self._closeOnSelect:
@@ -277,19 +346,135 @@ class MultiSelectComboBox(QComboBox):
                 item = self.model().itemFromIndex(index)
                 state = item.data(Qt.ItemDataRole.CheckStateRole)
                 new_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
-                item.setData(new_state, Qt.ItemDataRole.CheckStateRole)
+                if new_state == Qt.CheckState.Checked and not self._canSelectMore(1):
+                    self._notifyLimitReached()
+                else:
+                    item.setData(new_state, Qt.ItemDataRole.CheckStateRole)
                 # Update Select All state and emit selection change
                 self._syncSelectAllState()
                 self._emitSelectionIfChanged()
                 if self._closeOnSelect:
                     self.hidePopup()
+                    self._forceHidePopupView()
                 return True
         return False
+
+    # --- In-popup filter support ---
+    def setFilterEnabled(self, enabled: bool) -> None:
+        """Enable or disable a search/filter field inside the popup.
+
+        When enabled, a small QLineEdit is shown above the list and filters
+        visible rows on-the-fly by item text (case-insensitive contains).
+        """
+        self._filterEnabled = bool(enabled)
+        if not enabled:
+            # Tear down UI and clear hiding if disabling
+            self._teardownFilterUi()
+            self._clearRowHiding()
+        else:
+            # Lazily create on next popup show
+            pass
+
+    def isFilterEnabled(self) -> bool:
+        """Return whether the in-popup filter is enabled."""
+        return self._filterEnabled
+
+    def _ensureFilterUi(self) -> None:
+        if self._filterEdit is not None:
+            return
+        try:
+            v = self.view()
+        except Exception:
+            return
+        self._filterEdit = QLineEdit(v)
+        self._filterEdit.setPlaceholderText("Filter...")
+        self._filterEdit.textChanged.connect(self._applyTextFilter)
+        # Compute a comfortable height based on font metrics
+        fm = QFontMetrics(self._filterEdit.font())
+        h = fm.height() + 10
+        self._filterTopMargin = h + 2
+        try:
+            v.setViewportMargins(0, self._filterTopMargin, 0, 0)
+        except Exception:
+            pass
+        # Ensure clicks in the filter do not propagate to the list view
+        self._filterEdit.installEventFilter(self)
+
+    def _positionFilterUi(self) -> None:  # pragma: no cover (cosmetic UI positioning)
+        if not self._filterEnabled or self._filterEdit is None:
+            return
+        v = self.view()
+        # Keep viewport top margin in sync (some styles reset margins)
+        try:
+            v.setViewportMargins(0, self._filterTopMargin, 0, 0)
+        except Exception:
+            pass
+        # Place the edit at the very top inside the view
+        w = v.viewport().width() if v.viewport() is not None else v.width()
+        self._filterEdit.setGeometry(1, 1, max(0, w - 2), self._filterTopMargin - 2)
+
+    def _teardownFilterUi(self) -> None:  # pragma: no cover (cosmetic UI teardown)
+        if self._filterEdit is None:
+            # Also clear viewport margins
+            try:
+                self.view().setViewportMargins(0, 0, 0, 0)
+            except Exception:
+                pass
+            return
+        try:
+            self.view().setViewportMargins(0, 0, 0, 0)
+        except Exception:
+            pass
+        try:
+            self._filterEdit.deleteLater()
+        except Exception:
+            pass
+        self._filterEdit = None
+        self._filterTopMargin = 0
+
+    def _applyTextFilter(self, pattern: str) -> None:
+        # Hide rows that do not match the filter; keep Select All (if present) visible
+        patt = (pattern or "").strip()
+        casefold = patt.casefold()
+        m = self.model()
+        first = self._firstOptionRow()
+        for row in range(0, m.rowCount()):
+            if row < first:
+                # Always show pseudo-rows above options (e.g., Select All)
+                self.view().setRowHidden(row, False)
+                continue
+            item = m.item(row)
+            if not patt:
+                self.view().setRowHidden(row, False)
+            else:
+                text = item.text() if item is not None else ""
+                self.view().setRowHidden(row, casefold not in text.casefold())
+
+    def _clearRowHiding(self) -> None:
+        try:
+            m = self.model()
+            for row in range(0, m.rowCount()):
+                self.view().setRowHidden(row, False)
+        except Exception:
+            pass
 
     def showPopup(self) -> None:
         """Show the combo box popup.
         """
+        # Ensure filter UI is prepared before showing
+        if self._filterEnabled:
+            self._ensureFilterUi()
+            self._positionFilterUi()
         super().showPopup()
+        # In case the view/viewport were force-hidden during a previous close,
+        # explicitly re-show them to avoid a perceived lag or invisible popup.
+        try:
+            v = self.view()
+            v.show()
+            if v.viewport() is not None:
+                v.viewport().show()
+        except Exception:
+            pass
         self.closeOnLineEditClick = True
 
     def hidePopup(self) -> None:
@@ -298,7 +483,7 @@ class MultiSelectComboBox(QComboBox):
         super().hidePopup()
         self.startTimer(100)
 
-    def _forceHidePopupView(self) -> None:
+    def _forceHidePopupView(self) -> None:  # pragma: no cover (cosmetic force hide)
         """Ensure the internal view used for the popup is hidden immediately."""
         try:
             v = self.view()
@@ -352,14 +537,18 @@ class MultiSelectComboBox(QComboBox):
             rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
             texts = [self.typeSelection(i, display_type) for i in rows]
 
-            if texts:
-                text = delimiter.join(str(t) for t in texts)
-            else:
-                text = self.placeholderText if hasattr(self, 'placeholderText') else ""
+            # Apply optional summarization for display text
+            text = self._buildDisplayText(texts, delimiter)
 
             # Also set native placeholder for better styling when empty
             if not texts:
                 self.lineEdit().setPlaceholderText(self.placeholderText)
+
+            # Keep tooltip synchronized with the full (non-elided) text so users
+            # can hover to see the entire selection when the display is elided.
+            # Mirror currentText(): include placeholder when no selections.
+            if getattr(self, "_elideToolTipEnabled", False):
+                self.setToolTip(text)
 
             metrics = QFontMetrics(self.lineEdit().font())
             elidedText = metrics.elidedText(
@@ -424,6 +613,14 @@ class MultiSelectComboBox(QComboBox):
         Returns:
             List[Any]: A list of currently selected data (read using getOutputDataRole()).
         """
+        # Rebuild cache to reflect any external model changes that may not have
+        # gone through our normal update paths yet
+        self._rebuildCheckedCache()
+        # Enforce max selection proactively if exceeded
+        if self._hasMaxLimit():
+            selected_count = len([r for r in self._checkedRows if self._isOptionRow(r)])
+            if selected_count > int(self._maxSelectionCount or 0):
+                self._enforceMaxSelection()
         output_type = self.getOutputType()
         rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
         return [self.typeSelection(i, output_type) for i in rows]
@@ -436,11 +633,19 @@ class MultiSelectComboBox(QComboBox):
         """
         self._beginBulkUpdate()
         try:
+            allowed = set(indexes)
+            # Enforce "options only" range
+            allowed = {i for i in allowed if self._isOptionRow(i)}
+            # Apply limit if present
+            if self._hasMaxLimit() and len(allowed) > self._maxSelectionCount:  # type: ignore[operator]
+                allowed = set(sorted(allowed)[: int(self._maxSelectionCount or 0)])
             for i in range(self._firstOptionRow(), self.model().rowCount()):
                 self.model().item(i).setData(
-                    Qt.CheckState.Checked if i in indexes else Qt.CheckState.Unchecked,
+                    Qt.CheckState.Checked if i in allowed else Qt.CheckState.Unchecked,
                     Qt.ItemDataRole.CheckStateRole,
                 )
+            if self._hasMaxLimit() and len(allowed) < len(indexes):
+                self._notifyLimitReached()
         finally:
             self._endBulkUpdate()
 
@@ -450,6 +655,13 @@ class MultiSelectComboBox(QComboBox):
         Returns:
             List[int]: A list of indexes of selected items.
         """
+        # Keep cache in sync in case of external modifications
+        self._rebuildCheckedCache()
+        # Enforce max selection if needed before reporting
+        if self._hasMaxLimit():
+            selected_rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
+            if len(selected_rows) > int(self._maxSelectionCount or 0):
+                self._enforceMaxSelection()
         return sorted(r for r in self._checkedRows if self._isOptionRow(r))
 
     def setPlaceholderText(self, text: str) -> None:
@@ -535,9 +747,96 @@ class MultiSelectComboBox(QComboBox):
         delimiter = self.getDisplayDelimiter()
         rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
         parts = [self.typeSelection(i, display_type) for i in rows]
-        if parts:
+        return self._buildDisplayText(parts, delimiter)
+
+    # --- Optional summarization API ---
+    def setSummaryThreshold(self, threshold: Optional[int]) -> None:
+        """Set the number of items to show before summarizing.
+
+        - None disables summarization (default behavior).
+        - 0 means always summarize (even one selection).
+        - N>0 shows up to N items, beyond that summarizes.
+        """
+        if threshold is None:
+            self._summaryThreshold = None
+        else:
+            if threshold < 0:
+                raise ValueError("Summary threshold must be >= 0 or None")
+            self._summaryThreshold = int(threshold)
+        self.updateText()
+
+    def getSummaryThreshold(self) -> Optional[int]:
+        """Return the current summarization threshold or None if disabled."""
+        return self._summaryThreshold
+
+    def setSummaryMode(self, mode: str) -> None:
+        """Set summarization mode: 'count' or 'leading'.
+
+        - 'count': shows text based on _summaryCountFormat (e.g., "{count} selected").
+        - 'leading': shows first N items then _summaryLeadingFormat (e.g., "A, B … +2 more").
+        """
+        if mode not in ("count", "leading"):
+            raise ValueError("Summary mode must be 'count' or 'leading'")
+        self._summaryMode = mode
+        self.updateText()
+
+    def getSummaryMode(self) -> str:
+        """Return current summarization mode."""
+        return self._summaryMode
+
+    def setSummaryFormat(self, *, count: Optional[str] = None, leading: Optional[str] = None) -> None:
+        """Customize summary text formats.
+
+        Args:
+            count: Format for count mode. Available fields: {count}.
+            leading: Format for leading mode. Available fields: {shown}, {more}.
+        """
+        if count is not None:
+            # sanity check
+            if "{count}" not in count:
+                raise ValueError("count format must include '{count}' placeholder")
+            self._summaryCountFormat = count
+        if leading is not None:
+            if "{shown}" not in leading or "{more}" not in leading:
+                raise ValueError("leading format must include '{shown}' and '{more}' placeholders")
+            self._summaryLeadingFormat = leading
+        self.updateText()
+
+    def getSummaryFormat(self) -> Tuple[str, str]:
+        """Return (count_format, leading_format)."""
+        return self._summaryCountFormat, self._summaryLeadingFormat
+
+    def _buildDisplayText(self, parts: List[Any], delimiter: str) -> str:
+        """Build the display text from selected parts with optional summarization."""
+        # No selection: return placeholder
+        if not parts:
+            return self.placeholderText if hasattr(self, 'placeholderText') else ""
+
+        # If summarization is disabled, return full joined text
+        if self._summaryThreshold is None:
             return delimiter.join(str(p) for p in parts)
-        return self.placeholderText if hasattr(self, 'placeholderText') else ""
+
+        # Summarization enabled
+        count = len(parts)
+        threshold = int(self._summaryThreshold)
+
+        if self._summaryMode == "count":
+            # Always summarize when threshold is not None and count >= threshold
+            # If threshold>0 and count < threshold, show full list
+            if threshold > 0 and count < threshold:
+                return delimiter.join(str(p) for p in parts)
+            return self._summaryCountFormat.format(count=count)
+
+        # leading mode
+        if threshold == 0:
+            shown_list: List[str] = []
+        else:
+            shown_list = [str(p) for p in parts[:threshold]]
+        more = max(0, count - threshold)
+        if more <= 0:
+            return delimiter.join(shown_list)
+        shown = delimiter.join(shown_list)
+        return self._summaryLeadingFormat.format(shown=shown, more=more)
 
     def setCurrentText(self, value: Iterable[str] | str) -> None:  # type: ignore[override]
         """Select items matching the provided value.
@@ -566,10 +865,14 @@ class MultiSelectComboBox(QComboBox):
             for i in range(self._firstOptionRow(), self.model().rowCount()):
                 item = self.model().item(i)
                 match = item.text() in to_select or str(item.data(int(Qt.ItemDataRole.UserRole))) in to_select
-                item.setData(
-                    Qt.CheckState.Checked if match else Qt.CheckState.Unchecked,
-                    Qt.ItemDataRole.CheckStateRole,
-                )
+                if match:
+                    if self._canSelectMore(1):
+                        item.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+                    else:
+                        self._notifyLimitReached()
+                        item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+                else:
+                    item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         finally:
             self._endBulkUpdate()
 
@@ -616,8 +919,22 @@ class MultiSelectComboBox(QComboBox):
         """
         self._beginBulkUpdate()
         try:
+            remaining = self._remainingSelectable()
+            if remaining == 0 and self._hasMaxLimit():
+                self._notifyLimitReached()
+                return
+            count_selected = 0
             for i in range(self._firstOptionRow(), self.model().rowCount()):
-                self.model().item(i).setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+                item = self.model().item(i)
+                if item.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked:
+                    continue
+                if self._hasMaxLimit() and count_selected >= remaining:
+                    break
+                item.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+                count_selected += 1
+            # If we couldn't select all due to limit, surface feedback
+            if self._hasMaxLimit() and (len([r for r in self._checkedRows if self._isOptionRow(r)]) >= self._maxSelectionCount):
+                self._notifyLimitReached()
         finally:
             self._endBulkUpdate()
 
@@ -634,6 +951,13 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._endBulkUpdate()
 
+    # Public clear() slot for better API discoverability and to integrate with
+    # the line edit clear button UX. This clears the selection and lets the
+    # coalesced update emit selectionChanged once.
+    def clear(self) -> None:  # type: ignore[override]
+        """Clear the current selection and update the display once."""
+        self.clearSelection()
+
     def invertSelection(self) -> None:
         """Invert the selection state of all items.
 
@@ -642,13 +966,21 @@ class MultiSelectComboBox(QComboBox):
         """
         self._beginBulkUpdate()
         try:
+            remaining = self._remainingSelectable()
             for i in range(self._firstOptionRow(), self.model().rowCount()):
                 item = self.model().item(i)
                 state = item.data(Qt.ItemDataRole.CheckStateRole)
-                item.setData(
-                    Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked,
-                    Qt.ItemDataRole.CheckStateRole,
-                )
+                if state == Qt.CheckState.Checked:
+                    item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+                else:
+                    if self._canSelectMore(1):
+                        item.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+                        remaining = self._remainingSelectable()
+                    else:
+                        # Skip toggling to checked due to limit
+                        pass
+            if self._hasMaxLimit() and self._remainingSelectable() == 0:
+                self._notifyLimitReached()
         finally:
             self._endBulkUpdate()
 
@@ -738,6 +1070,9 @@ class MultiSelectComboBox(QComboBox):
                     self._checkedRows.add(row)
                 else:
                     self._checkedRows.discard(row)
+        # After updates, enforce max selection if external changes exceeded it
+        if self._hasMaxLimit():
+            self._enforceMaxSelection()
         # Coalesce expensive UI updates
         self._scheduleCoalescedUpdate()
 
@@ -794,7 +1129,7 @@ class MultiSelectComboBox(QComboBox):
         start = self._firstOptionRow()
         for i in range(start, self.model().rowCount()):
             item = self.model().item(i)
-            if item is not None and item.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked:
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
                 self._checkedRows.add(i)
 
     def _onRowsInserted(self, parent, start: int, end: int) -> None:
@@ -803,6 +1138,7 @@ class MultiSelectComboBox(QComboBox):
             return
         self._rebuildCheckedCache()
         self._scheduleCoalescedUpdate()
+        self._reapplyFilterIfNeeded()
 
     def _onRowsRemoved(self, parent, start: int, end: int) -> None:
         # Rebuild cache as rows shift; then schedule update
@@ -810,6 +1146,7 @@ class MultiSelectComboBox(QComboBox):
             return
         self._rebuildCheckedCache()
         self._scheduleCoalescedUpdate()
+        self._reapplyFilterIfNeeded()
 
     def _onModelReset(self) -> None:
         # Model structure changed drastically
@@ -817,12 +1154,21 @@ class MultiSelectComboBox(QComboBox):
             return
         self._rebuildCheckedCache()
         self._scheduleCoalescedUpdate()
+        self._reapplyFilterIfNeeded()
 
     def _scheduleCoalescedUpdate(self) -> None:
         if self._updateScheduled:
             return
         self._updateScheduled = True
         QTimer.singleShot(0, self._performCoalescedUpdate)
+
+    def _reapplyFilterIfNeeded(self) -> None:
+        # Reapply filtering after model changes
+        try:
+            if self._filterEnabled and self._filterEdit is not None:
+                self._applyTextFilter(self._filterEdit.text())
+        except Exception:
+            pass
 
     def _performCoalescedUpdate(self) -> None:
         self._updateScheduled = False
@@ -833,6 +1179,88 @@ class MultiSelectComboBox(QComboBox):
         self._updateAccessibilityLabels()
         # Update ARIA-like hints in tooltips/status tips for all rows
         self._updateAriaLikeHints()
+
+    # --- Max selection feature ---
+    def setMaxSelectionCount(self, max_count: Optional[int]) -> None:
+        """Set the maximum number of items that can be selected.
+
+        Pass None, 0 or a negative value to disable the limit.
+        """
+        if max_count is None or (isinstance(max_count, int) and max_count <= 0):
+            self._maxSelectionCount = None
+        else:
+            self._maxSelectionCount = int(max_count)
+        # Enforce immediately in case current selection exceeds new limit
+        if self._hasMaxLimit():
+            self._enforceMaxSelection()
+        self._performCoalescedUpdate()
+
+    def maxSelectionCount(self) -> Optional[int]:
+        """Return the current maximum selection count, or None if unlimited."""
+        return self._maxSelectionCount
+
+    def _hasMaxLimit(self) -> bool:
+        return isinstance(self._maxSelectionCount, int) and self._maxSelectionCount is not None
+
+    def _remainingSelectable(self) -> int:
+        if not self._hasMaxLimit():
+            return 10**9  # effectively unlimited
+        current = len([r for r in self._checkedRows if self._isOptionRow(r)])
+        return max(0, int(self._maxSelectionCount or 0) - current)
+
+    def _canSelectMore(self, n: int) -> bool:
+        if not self._hasMaxLimit():
+            return True
+        return self._remainingSelectable() >= n
+
+    def _enforceMaxSelection(self) -> None:
+        """If the current selection exceeds the limit, uncheck excess items deterministically.
+
+        We keep the first N selected by row order and uncheck the rest.
+        """
+        if not self._hasMaxLimit():
+            return
+        allowed = int(self._maxSelectionCount or 0)
+        selected_rows = sorted(r for r in self._checkedRows if self._isOptionRow(r))
+        if len(selected_rows) <= allowed:
+            return
+        self._beginBulkUpdate()
+        try:
+            for r in selected_rows[allowed:]:
+                item = self.model().item(r)
+                if item is not None:
+                    item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        finally:
+            self._endBulkUpdate()
+        self._notifyLimitReached()
+
+    def _notifyLimitReached(self) -> None:  # pragma: no cover (tooltip only)
+        """Show a brief tooltip/status message indicating the selection limit."""
+        if not self._hasMaxLimit():
+            return
+        try:
+            # Show tooltip near cursor or over the view
+            msg = f"Maximum {self._maxSelectionCount} selections allowed."
+            pos = QCursor.pos()
+            QToolTip.showText(pos, msg, self.view())
+        except Exception:
+            pass
+
+    # --- Internal handlers ---
+    def _onLineEditTextChanged(self, text: str) -> None:
+        """Handle user-initiated text clears from the line edit's clear button.
+
+        The line edit is read-only and reflects selection. If the user clicks
+        the clear button, QLineEdit clears its text and emits textChanged("").
+        We treat that as intent to clear selection. Programmatic updates to the
+        text are guarded by _updatingText and blockSignals, so we won't react
+        to our own updates here.
+        """
+        if self._updatingText:
+            return
+        if text == "":
+            # Clear once; clearSelection() will schedule a single emit.
+            self.clear()
 
     def _updateAccessibilityLabels(self) -> None:
         """Update accessible names for the combo box and line edit.
@@ -859,7 +1287,7 @@ class MultiSelectComboBox(QComboBox):
         if self.lineEdit() is not None:
             self.lineEdit().setAccessibleName(f"Selected items. {summary}")
 
-    def _updateAriaLikeHints(self) -> None:
+    def _updateAriaLikeHints(self) -> None:  # pragma: no cover (cosmetic tooltips/status hints)
         """Update tooltips and status tips for items to provide ARIA-like hints.
 
         This augments accessibility by offering descriptive hints to all users,
@@ -917,7 +1345,11 @@ class MultiSelectComboBox(QComboBox):
             checked = item.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
             state_text = "selected" if checked else "not selected"
             text = item.text()
-            hint = f"Option '{text}' is {state_text}. {nav_hint}"
+            if self._hasMaxLimit():
+                limit_hint = f" Maximum {self._maxSelectionCount} selections."
+            else:
+                limit_hint = ""
+            hint = f"Option '{text}' is {state_text}. {nav_hint}{limit_hint}"
             try:
                 item.setToolTip(hint)
                 item.setStatusTip(hint)
