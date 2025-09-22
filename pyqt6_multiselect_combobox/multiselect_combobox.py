@@ -1,6 +1,6 @@
 from typing import Any, Iterable, List, Optional, Tuple
 
-from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate, QLineEdit, QToolTip
+from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate, QLineEdit, QToolTip, QListView
 from PyQt6.QtGui import QStandardItem, QPalette, QFontMetrics, QCursor
 from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QObject, QTimerEvent, QTimer
 
@@ -99,6 +99,8 @@ class MultiSelectComboBox(QComboBox):
 
         # Whether selecting an item should close the popup (configurable)
         self._closeOnSelect = False
+        # Default batch size for QListView batched layout (0 disables batching)
+        self._viewBatchSize: int = 256
 
         # Reentrancy guard for updateText
         self._updatingText = False
@@ -113,6 +115,26 @@ class MultiSelectComboBox(QComboBox):
 
         # Set initial accessible names for screen readers
         self._updateAccessibilityLabels()
+
+        # Optimize internal QListView for large models
+        try:
+            v = self.view()
+            # Uniform item sizes improve performance when all rows have same height
+            try:
+                v.setUniformItemSizes(True)
+            except Exception:
+                pass
+            # Enable batched layout/painting for smoother scrolling on large lists
+            try:
+                if self._viewBatchSize and self._viewBatchSize > 0:
+                    v.setLayoutMode(QListView.LayoutMode.Batched)
+                    v.setBatchSize(self._viewBatchSize)
+                else:
+                    v.setLayoutMode(QListView.LayoutMode.SinglePass)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         # If the user clicks the clear button, QLineEdit clears its text.
         # Detect that user action via textChanged when not in a programmatic
@@ -714,6 +736,57 @@ class MultiSelectComboBox(QComboBox):
     def isCloseOnSelect(self) -> bool:
         """Return whether the popup closes after selecting/toggling an item."""
         return self._closeOnSelect
+
+    # --- View performance tuning ---
+    def setUniformItemSizesEnabled(self, enabled: bool) -> None:
+        """Enable/disable uniform item sizes on the internal QListView."""
+        try:
+            self.view().setUniformItemSizes(bool(enabled))
+        except Exception:
+            pass
+
+    def isUniformItemSizesEnabled(self) -> bool:
+        """Return whether uniform item sizes are enabled on the view."""
+        try:
+            return bool(self.view().uniformItemSizes())
+        except Exception:
+            return False
+
+    def setViewBatchSize(self, size: Optional[int]) -> None:
+        """Set the QListView batch size for batched layout.
+
+        - size > 0: enable batched layout and set the batch size
+        - size <= 0 or None: disable batching (SinglePass)
+        """
+        try:
+            self._viewBatchSize = int(size) if size is not None else 0
+        except Exception:
+            self._viewBatchSize = 0
+        try:
+            v = self.view()
+            if self._viewBatchSize > 0:
+                try:
+                    v.setLayoutMode(QListView.LayoutMode.Batched)
+                except Exception:
+                    pass
+                try:
+                    v.setBatchSize(self._viewBatchSize)
+                except Exception:
+                    pass
+            else:
+                try:
+                    v.setLayoutMode(QListView.LayoutMode.SinglePass)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def getViewBatchSize(self) -> int:
+        """Return current batch size (>0 if batched, 0 if disabled)."""
+        try:
+            return int(self._viewBatchSize)
+        except Exception:
+            return 0
 
     def getCurrentOptions(self) -> List[Tuple[str, Any]]:
         """Get the currently selected options along with their associated data.

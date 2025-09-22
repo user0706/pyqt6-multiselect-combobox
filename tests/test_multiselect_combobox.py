@@ -3,6 +3,7 @@ import types
 import pytest
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QListView
 from PyQt6.QtTest import QTest
 from PyQt6.QtCore import QPoint
 from PyQt6.QtCore import Qt
@@ -1048,6 +1049,8 @@ def test_disabling_tooltip_sync_stops_updates(qapp):
     assert c.currentText() == "C"
     # Tooltip should still be the previous value (or at least not equal currentText)
     assert c.toolTip() != c.currentText()
+
+
 def test_set_current_indexes_respects_limit(qapp):
     c = MultiSelectComboBox()
     c.addItems(["A", "B", "C"])  # 3 items
@@ -1340,3 +1343,45 @@ def test_remove_item_does_not_remove_select_all_row(qapp):
     qapp.processEvents()
     assert c.model().rowCount() == before
     assert c.model().item(0).data() == "__select_all__"
+
+
+# --- View virtualization defaults and setters ---
+def test_view_virtualization_defaults(qapp):
+    c = MultiSelectComboBox()
+    # Defaults configured in widget init
+    v = c.view()
+    # Uniform item sizes should be enabled by default
+    assert v.uniformItemSizes() is True
+    # Batch size default set by widget
+    assert hasattr(c, "getViewBatchSize")
+    assert c.getViewBatchSize() == 256
+    # View should be in batched layout mode with that batch size
+    assert v.layoutMode() == QListView.LayoutMode.Batched
+    assert v.batchSize() == 256
+
+
+def test_view_virtualization_setters(qapp):
+    c = MultiSelectComboBox()
+    v = c.view()
+    # Toggle uniform item sizes off and on via public API
+    c.setUniformItemSizesEnabled(False)
+    assert c.isUniformItemSizesEnabled() is False
+    assert v.uniformItemSizes() is False
+    c.setUniformItemSizesEnabled(True)
+    assert c.isUniformItemSizesEnabled() is True
+    assert v.uniformItemSizes() is True
+
+    # Disable batching via None and 0
+    c.setViewBatchSize(None)
+    assert c.getViewBatchSize() == 0
+    assert v.layoutMode() == QListView.LayoutMode.SinglePass
+    # Explicit zero should also be SinglePass
+    c.setViewBatchSize(0)
+    assert c.getViewBatchSize() == 0
+    assert v.layoutMode() == QListView.LayoutMode.SinglePass
+
+    # Set a custom positive batch size and verify batched mode + size
+    c.setViewBatchSize(512)
+    assert c.getViewBatchSize() == 512
+    assert v.layoutMode() == QListView.LayoutMode.Batched
+    assert v.batchSize() == 512
