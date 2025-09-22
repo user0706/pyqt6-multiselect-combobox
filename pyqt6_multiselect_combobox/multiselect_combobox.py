@@ -1033,6 +1033,49 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._endBulkUpdate()
 
+    def removeItem(self, index: int) -> None:  # type: ignore[override]
+        """Remove a single item by its model index.
+
+        This respects the optional "Select All" pseudo-item and will not remove it.
+        Indices follow the underlying model (i.e., include the "Select All" row when enabled).
+        """
+        m = self.model()
+        if index < 0 or index >= m.rowCount():
+            return
+        # Do not remove the Select All pseudo-item
+        if self._selectAllEnabled and index == 0 and m.item(0) is not None and m.item(0).data() == "__select_all__":
+            return
+        self._beginBulkUpdate()
+        try:
+            m.removeRow(index)
+        finally:
+            self._endBulkUpdate()
+
+    def removeItems(self, indexes: Iterable[int]) -> None:
+        """Remove multiple items by their model indices in a single batch.
+
+        - Indices should refer to the underlying model (they include the optional
+          "Select All" row when enabled).
+        - The optional "Select All" pseudo-item is never removed.
+        - Removals are performed in descending index order to avoid shifting.
+        """
+        m = self.model()
+        if not indexes:
+            return
+        # Normalize and filter invalid indices; skip Select All pseudo-row if present
+        first_option = self._firstOptionRow()
+        unique = sorted({i for i in indexes if 0 <= i < m.rowCount()}, reverse=True)
+        if self._selectAllEnabled and m.rowCount() > 0 and m.item(0) is not None and m.item(0).data() == "__select_all__":
+            unique = [i for i in unique if i >= first_option]
+        if not unique:
+            return
+        self._beginBulkUpdate()
+        try:
+            for i in unique:
+                m.removeRow(i)
+        finally:
+            self._endBulkUpdate()
+
     # Public clear() slot for better API discoverability and to integrate with
     # the line edit clear button UX. This clears the selection and lets the
     # coalesced update emit selectionChanged once.

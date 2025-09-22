@@ -1285,3 +1285,58 @@ def test_set_current_data_values_respects_limit(qapp):
     c.setMaxSelectionCount(1)
     c.setCurrentDataValues(["da", "db"])  # ask for 2
     assert len(c.getCurrentIndexes()) == 1
+
+
+# --- Removal helpers: removeItem / removeItems ---
+
+def test_remove_item_updates_selection_and_cache(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # rows: 0..2
+    # Select middle item, then remove it
+    c.setCurrentIndexes([1])
+    captured = []
+
+    def on_changed(values):
+        captured.append(list(values))
+
+    c.selectionChanged.connect(on_changed)
+    # Remove selected row
+    c.removeItem(1)
+    qapp.processEvents()
+    # Row count shrinks and selection should now be empty
+    assert c.model().rowCount() == 2
+    assert c.getCurrentIndexes() == []
+    # Ensure a signal was emitted reflecting the cleared selection
+    assert captured and captured[-1] == []
+
+
+def test_remove_items_bulk_and_select_all_resync(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 options
+    c.setSelectAllEnabled(True)
+    # Select all options
+    c.selectAll()
+    # Remove first and last option rows (indices relative to model with SA at 0)
+    # Option indices are 1,2,3 -> remove 1 and 3
+    c.removeItems([1, 3])
+    qapp.processEvents()
+    # Only one option remains and should be selected
+    assert c.model().rowCount() == 2  # SA + 1 option
+    assert c.getCurrentIndexes() == [1]
+    # With a single remaining option selected, Select All should be fully checked
+    sa = c.model().item(0)
+    assert sa is not None
+    assert sa.data() == "__select_all__"
+    assert sa.checkState() == Qt.CheckState.Checked
+
+
+def test_remove_item_does_not_remove_select_all_row(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setSelectAllEnabled(True)
+    # Attempt to remove index 0 (Select All) -> should be ignored
+    before = c.model().rowCount()
+    c.removeItem(0)
+    qapp.processEvents()
+    assert c.model().rowCount() == before
+    assert c.model().item(0).data() == "__select_all__"
