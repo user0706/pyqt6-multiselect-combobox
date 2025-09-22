@@ -79,6 +79,9 @@ class MultiSelectComboBox(QComboBox):
         # Initialize caches
         self._rebuildCheckedCache()
 
+        # Set initial accessible names for screen readers
+        self._updateAccessibilityLabels()
+
     def setOutputType(self, output_type: str) -> None:
         """Set the output type for the combo box.
 
@@ -368,6 +371,8 @@ class MultiSelectComboBox(QComboBox):
                 self.lineEdit().setText(elidedText)
             finally:
                 self.lineEdit().blockSignals(False)
+            # Keep accessibility labels in sync with the UI text/selection
+            self._updateAccessibilityLabels()
         finally:
             self._updatingText = False
 
@@ -824,6 +829,100 @@ class MultiSelectComboBox(QComboBox):
         self.updateText()
         self._syncSelectAllState()
         self._emitSelectionIfChanged()
+        # Ensure accessible names reflect the latest selection state
+        self._updateAccessibilityLabels()
+        # Update ARIA-like hints in tooltips/status tips for all rows
+        self._updateAriaLikeHints()
+
+    def _updateAccessibilityLabels(self) -> None:
+        """Update accessible names for the combo box and line edit.
+
+        This helps screen readers announce a useful summary such as
+        "3 items selected.". The widget role remains provided by Qt based
+        on the widget type (QComboBox / QLineEdit).
+        """
+        try:
+            count = len([r for r in self._checkedRows if self._isOptionRow(r)])
+        except Exception:
+            count = 0
+
+        if count == 0:
+            summary = "No items selected."
+        elif count == 1:
+            summary = "1 item selected."
+        else:
+            summary = f"{count} items selected."
+
+        # Accessible names for the combo and its editor
+        # Keep the names concise and informative for screen readers.
+        self.setAccessibleName(f"Multi-select combo box. {summary}")
+        if self.lineEdit() is not None:
+            self.lineEdit().setAccessibleName(f"Selected items. {summary}")
+
+    def _updateAriaLikeHints(self) -> None:
+        """Update tooltips and status tips for items to provide ARIA-like hints.
+
+        This augments accessibility by offering descriptive hints to all users,
+        including sighted users, via native Qt tooltips/status bar messages.
+        """
+        try:
+            m = self.model()
+        except Exception:
+            return
+        if m is None:
+            return
+
+        # Determine select-all row info if present
+        has_sa = self._selectAllEnabled and m.rowCount() > 0 and m.item(0) is not None and m.item(0).data() == "__select_all__"
+        first_option = self._firstOptionRow()
+
+        # Compute select-all state summary
+        total_options = max(0, m.rowCount() - first_option)
+        selected_count = len([r for r in self._checkedRows if self._isOptionRow(r)])
+
+        # Helper for keyboard hint
+        nav_hint = "Use Up/Down to navigate; press Space or Enter to toggle."
+
+        # Update Select All pseudo-item hint
+        if has_sa:
+            sa = m.item(0)
+            sa_state = sa.data(Qt.ItemDataRole.CheckStateRole)
+            if selected_count == 0:
+                summary = "None selected."
+            elif selected_count == total_options and total_options > 0:
+                summary = "All selected."
+            else:
+                summary = f"{selected_count} of {total_options} selected."
+            if sa_state == Qt.CheckState.PartiallyChecked:
+                state_text = "partially checked"
+            elif sa_state == Qt.CheckState.Checked:
+                state_text = "checked"
+            else:
+                state_text = "unchecked"
+            sa_hint = (
+                f"{self._selectAllText}: toggles selection of all items; currently {state_text}. "
+                f"{summary} {nav_hint}"
+            )
+            try:
+                sa.setToolTip(sa_hint)
+                sa.setStatusTip(sa_hint)
+            except Exception:
+                pass
+
+        # Update regular option items
+        for row in range(first_option, m.rowCount()):
+            item = m.item(row)
+            if item is None:
+                continue
+            checked = item.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+            state_text = "selected" if checked else "not selected"
+            text = item.text()
+            hint = f"Option '{text}' is {state_text}. {nav_hint}"
+            try:
+                item.setToolTip(hint)
+                item.setStatusTip(hint)
+            except Exception:
+                pass
 
     # --- Public API for coalescing updates ---
     def beginUpdate(self) -> None:
