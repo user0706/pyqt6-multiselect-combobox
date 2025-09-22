@@ -311,6 +311,12 @@ class MultiSelectComboBox(QComboBox):
                             self.clearSelection()
                     else:
                         item = self.model().itemFromIndex(index)
+                        # Respect disabled rows: do not toggle via keyboard
+                        try:
+                            if not bool(item.flags() & Qt.ItemFlag.ItemIsEnabled):
+                                return True
+                        except Exception:
+                            pass
                         state = item.data(Qt.ItemDataRole.CheckStateRole)
                         new_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
                         if new_state == Qt.CheckState.Checked and not self._canSelectMore(1):
@@ -344,6 +350,12 @@ class MultiSelectComboBox(QComboBox):
                 return True
             else:
                 item = self.model().itemFromIndex(index)
+                # Respect disabled rows: do not toggle via mouse
+                try:
+                    if not bool(item.flags() & Qt.ItemFlag.ItemIsEnabled):
+                        return True
+                except Exception:
+                    pass
                 state = item.data(Qt.ItemDataRole.CheckStateRole)
                 new_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
                 if new_state == Qt.CheckState.Checked and not self._canSelectMore(1):
@@ -565,12 +577,15 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._updatingText = False
 
-    def addItem(self, text: str, data: Optional[Any] = None) -> None:
+    def addItem(self, text: str, data: Optional[Any] = None, *, enabled: bool = True) -> None:
         """Add an item to the combo box.
 
         Args:
             text (str): The text to display.
             data (Optional[Any]): The associated data. Default is None.
+            enabled (bool): Whether the item should be enabled (selectable via user
+                interaction). Disabled items remain visible but cannot be toggled by
+                the user. Programmatic changes are still possible. Default True.
         """
         # Enforce duplicates policy: when disabled, prevent adding an item
         # that duplicates by text OR by data (strictest interpretation).
@@ -588,9 +603,12 @@ class MultiSelectComboBox(QComboBox):
         # backward compatibility with item.data() and to align with Qt idioms.
         item.setData(data or text)  # default role (matches previous behavior)
         item.setData(data or text, int(Qt.ItemDataRole.UserRole))
-        item.setFlags(
-            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
-        )
+        # Build flags respecting the requested enabled state, always ensuring
+        # user-checkable/selectable so they appear and can be controlled when enabled
+        flags = Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
+        if enabled:
+            flags |= Qt.ItemFlag.ItemIsEnabled
+        item.setFlags(flags)
         item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         self.model().appendRow(item)
         self._syncSelectAllState()

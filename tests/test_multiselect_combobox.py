@@ -1193,3 +1193,65 @@ def test_close_on_select_mouse_select_all_row_hides_popup_and_view(qapp):
     qapp.processEvents()
     assert not c.view().isVisible()
     assert not c.view().viewport().isVisible()
+
+
+# --- Disabled items support ---
+
+def test_add_item_disabled_sets_flags(qapp):
+    c = MultiSelectComboBox()
+    c.addItem("A", enabled=True)
+    c.addItem("B", enabled=False)
+    flags_a = c.model().item(0).flags()
+    flags_b = c.model().item(1).flags()
+    assert bool(flags_a & Qt.ItemFlag.ItemIsEnabled)
+    assert not bool(flags_b & Qt.ItemFlag.ItemIsEnabled)
+    # Both should still be selectable/user-checkable (for consistency/UI display)
+    assert bool(flags_a & Qt.ItemFlag.ItemIsSelectable)
+    assert bool(flags_b & Qt.ItemFlag.ItemIsSelectable)
+
+
+def test_mouse_click_does_not_toggle_disabled_item(qapp):
+    c = MultiSelectComboBox()
+    c.addItem("Enabled", enabled=True)
+    c.addItem("Disabled", enabled=False)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Click disabled row (index 1)
+    idx = c.model().index(1, 0)
+    rect = c.view().visualRect(idx)
+    pos = rect.center()
+    from PyQt6.QtTest import QTest
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos)
+    # Disabled row should not become selected
+    assert c.getCurrentIndexes() == []
+    c.hidePopup()
+
+
+def test_keyboard_toggle_ignored_for_disabled_item(qapp):
+    from PyQt6.QtTest import QTest
+    c = MultiSelectComboBox()
+    c.addItem("Enabled", enabled=True)
+    c.addItem("Disabled", enabled=False)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Attempt to toggle disabled row via Space/Enter
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    QTest.keyClick(c.view(), Qt.Key.Key_Return)
+    assert c.getCurrentIndexes() == []
+    c.hidePopup()
+
+
+def test_programmatic_selection_can_include_disabled(qapp):
+    c = MultiSelectComboBox()
+    c.addItem("Enabled", enabled=True)
+    c.addItem("Disabled", enabled=False)
+    # Programmatically set selection -> disabled item should be checked
+    c.setCurrentIndexes([1])
+    assert c.getCurrentIndexes() == [1]
