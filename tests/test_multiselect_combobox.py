@@ -588,3 +588,62 @@ def test_runtime_model_rows_and_reset_paths(qapp):
     m.appendRow(it2)
     qapp.processEvents()
     assert c.getCurrentIndexes() == [0]
+
+
+# --- Accessibility (A11y) tests ---
+
+def test_accessible_names_update_with_selection(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    # Initially none selected
+    qapp.processEvents()
+    assert "No items selected." in (c.accessibleName() or "")
+    assert (c.lineEdit().accessibleName() or "").startswith("Selected items.")
+
+    # Select one item -> should say 1 item selected
+    c.setCurrentIndexes([0])
+    qapp.processEvents()
+    assert "1 item selected." in (c.accessibleName() or "")
+    assert "1 item selected." in (c.lineEdit().accessibleName() or "")
+
+    # Select two items -> plural form
+    c.setCurrentIndexes([0, 2])
+    qapp.processEvents()
+    assert "2 items selected." in (c.accessibleName() or "")
+    assert "2 items selected." in (c.lineEdit().accessibleName() or "")
+
+
+def test_aria_like_hints_tooltips_and_status_tips(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setSelectAllEnabled(True)
+    c.show()
+    qapp.processEvents()
+
+    # Select All pseudo-item hints
+    sa = c.model().item(0)
+    # After coalesced update, tooltip/status tip should be populated
+    qapp.processEvents()
+    sa_tip = sa.toolTip() or ""
+    assert "toggles selection of all items" in sa_tip
+    assert "None selected." in sa_tip
+    assert "unchecked" in sa_tip or "partially checked" in sa_tip or "checked" in sa_tip
+    assert "Use Up/Down to navigate; press Space or Enter to toggle." in sa_tip
+
+    # Toggle to all selected and verify updated summary/state
+    c.selectAll()
+    qapp.processEvents()
+    sa_tip2 = sa.toolTip() or ""
+    assert "All selected." in sa_tip2
+    # Regular option hints
+    opt0 = c.model().item(1)
+    tip0 = opt0.toolTip() or ""
+    assert "Option 'A'" in tip0
+    assert "is selected" in tip0
+    assert "Use Up/Down to navigate; press Space or Enter to toggle." in tip0
+
+    # Clear and check option hint updates to not selected
+    c.clearSelection()
+    qapp.processEvents()
+    tip0_cleared = (c.model().item(1).toolTip() or "")
+    assert "is not selected" in tip0_cleared
