@@ -304,6 +304,37 @@ def test_event_filter_clicks_and_select_all_toggle(qapp):
     assert c.getCurrentIndexes() == []
 
     c.hidePopup()
+
+
+def test_max_selection_zero_and_negative_disable_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    # Zero should disable limit
+    c.setMaxSelectionCount(0)
+    c.selectAll()
+    assert len(c.getCurrentIndexes()) == 3
+    # Negative also disables
+    c.clearSelection()
+    c.setMaxSelectionCount(-5)
+    c.selectAll()
+    assert len(c.getCurrentIndexes()) == 3
+
+
+def test_line_edit_click_toggles_popup(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.show()
+    qapp.processEvents()
+    # Open popup explicitly to ensure consistent state
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+    # When popup open, clicking line edit should hide it due to closeOnLineEditClick
+    QTest.mouseClick(c.lineEdit(), Qt.MouseButton.LeftButton)
+    # hidePopup uses a 100ms timer; wait briefly for it to take effect
+    QTest.qWait(150)
+    qapp.processEvents()
+    assert not c.view().isVisible()
     qapp.processEvents()
 
 
@@ -604,6 +635,18 @@ def test_find_data_with_custom_role(qapp):
     assert c.findData("Bee", role=role) == 1
 
 
+def test_select_all_enabled_on_empty_model_no_crash(qapp):
+    c = MultiSelectComboBox()
+    # Enable Select All with no items and ensure no crash/edge
+    c.setSelectAllEnabled(True)
+    # selectAll on empty should not change selection and should not crash
+    c.selectAll()
+    assert c.getCurrentIndexes() == []
+    # clearSelection on empty
+    c.clearSelection()
+    assert c.getCurrentIndexes() == []
+
+
 def test_set_model_twice_disconnects_and_reconnects(qapp):
     from PyQt6.QtGui import QStandardItemModel, QStandardItem
     c = MultiSelectComboBox()
@@ -786,6 +829,46 @@ def test_clear_slot_clears_selection_and_emits_once(qapp):
     assert len(captured) == prev_len
 
 
+def test_line_edit_blocks_typing(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setDisplayType("text")
+    c.show()
+    qapp.processEvents()
+    # Focus line edit and attempt to type; eventFilter should block edits
+    c.lineEdit().setFocus()
+    QTest.keyClick(c.lineEdit(), Qt.Key.Key_A)
+    qapp.processEvents()
+    # No selection; currentText should remain empty (placeholder not set here)
+    assert c.currentText() == ""
+
+
+def test_keyboard_enter_toggle_paths(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setSelectAllEnabled(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    # Toggle option via Enter
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Return)
+    assert c.getCurrentIndexes() == [1]
+    # Toggle Select All via Enter -> should select all
+    c.view().setCurrentIndex(c.model().index(0, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Return)
+    assert [i for i in range(1, c.model().rowCount())] == c.getCurrentIndexes()
+    c.hidePopup()
+
+
+def test_type_selection_text_branch(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    # Ensure typeSelection returns text when requested explicitly
+    assert c.typeSelection(0, "text", expected_type="data") == "A"
+
+
 def test_line_edit_clear_button_action_clears_selection(qapp):
     c = MultiSelectComboBox()
     c.addItems(["A", "B"]) 
@@ -805,3 +888,128 @@ def test_line_edit_clear_button_action_clears_selection(qapp):
     qapp.processEvents()
     assert c.getCurrentIndexes() == []
     assert captured and captured[-1] == []
+
+
+# --- Max selection (setMaxSelectionCount) tests ---
+
+
+def test_max_selection_basic_enforcement(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C", "D"])  # 4 items
+    c.setMaxSelectionCount(2)
+    # selectAll should cap at 2
+    c.selectAll()
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_max_selection_disable_and_reenable(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C", "D"])  # 4 items
+    # Set a limit and select
+    c.setMaxSelectionCount(2)
+    assert c.maxSelectionCount() == 2
+    c.setCurrentIndexes([0, 1])
+    assert len(c.getCurrentIndexes()) == 2
+    # Disable the limit and select all
+    c.setMaxSelectionCount(None)
+    assert c.maxSelectionCount() is None
+    c.selectAll()
+    assert len(c.getCurrentIndexes()) == 4
+    # Re-enable with a stricter limit and ensure pruning occurs via getter
+    c.setMaxSelectionCount(1)
+    # Accessor should enforce pruning if needed
+    idxs = c.getCurrentIndexes()
+    assert len(idxs) == 1
+
+
+def test_invert_selection_with_limit_respects_capacity(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    # Start with first checked
+    c.setCurrentIndexes([0])
+    # Invert -> tries to check the other two, but should cap at 2 total
+    c.invertSelection()
+    idxs = c.getCurrentIndexes()
+    assert len(idxs) == 2
+
+
+def test_set_current_indexes_respects_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.setCurrentIndexes([0, 1, 2])
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_set_current_text_respects_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.setCurrentText(["A", "B", "C"])  # ask for 3
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_click_block_when_limit_reached(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Click to select first two
+    for row in [0, 1]:
+        idx = c.model().index(row, 0)
+        rect = c.view().visualRect(idx)
+        pos = rect.center()
+        QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos)
+    assert len(c.getCurrentIndexes()) == 2
+
+    # Try clicking third; should remain 2
+    idx3 = c.model().index(2, 0)
+    rect3 = c.view().visualRect(idx3)
+    pos3 = rect3.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos3)
+    assert len(c.getCurrentIndexes()) == 2
+
+    c.hidePopup()
+
+
+def test_keyboard_block_when_limit_reached(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Select first two via keyboard
+    c.view().setCurrentIndex(c.model().index(0, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    assert len(c.getCurrentIndexes()) == 2
+
+    # Attempt to select third via keyboard -> should stay at 2
+    c.view().setCurrentIndex(c.model().index(2, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    assert len(c.getCurrentIndexes()) == 2
+
+    c.hidePopup()
+
+
+def test_external_over_selection_is_enforced(qapp):
+    # If an external change somehow over-selects items, the widget should prune to the limit
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    # Manually mark all checked via model to simulate external change
+    for i in range(c._firstOptionRow(), c.model().rowCount()):
+        c.model().item(i).setCheckState(Qt.CheckState.Checked)
+    # Process pending updates
+    qapp.processEvents()
+    # The widget should prune back down to 2 selections
+    assert len(c.getCurrentIndexes()) == 2
