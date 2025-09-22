@@ -79,6 +79,9 @@ class MultiSelectComboBox(QComboBox):
         # Initialize caches
         self._rebuildCheckedCache()
 
+        # Set initial accessible names for screen readers
+        self._updateAccessibilityLabels()
+
     def setOutputType(self, output_type: str) -> None:
         """Set the output type for the combo box.
 
@@ -368,6 +371,8 @@ class MultiSelectComboBox(QComboBox):
                 self.lineEdit().setText(elidedText)
             finally:
                 self.lineEdit().blockSignals(False)
+            # Keep accessibility labels in sync with the UI text/selection
+            self._updateAccessibilityLabels()
         finally:
             self._updatingText = False
 
@@ -824,6 +829,33 @@ class MultiSelectComboBox(QComboBox):
         self.updateText()
         self._syncSelectAllState()
         self._emitSelectionIfChanged()
+        # Ensure accessible names reflect the latest selection state
+        self._updateAccessibilityLabels()
+
+    def _updateAccessibilityLabels(self) -> None:
+        """Update accessible names for the combo box and line edit.
+
+        This helps screen readers announce a useful summary such as
+        "3 items selected.". The widget role remains provided by Qt based
+        on the widget type (QComboBox / QLineEdit).
+        """
+        try:
+            count = len([r for r in self._checkedRows if self._isOptionRow(r)])
+        except Exception:
+            count = 0
+
+        if count == 0:
+            summary = "No items selected."
+        elif count == 1:
+            summary = "1 item selected."
+        else:
+            summary = f"{count} items selected."
+
+        # Accessible names for the combo and its editor
+        # Keep the names concise and informative for screen readers.
+        self.setAccessibleName(f"Multi-select combo box. {summary}")
+        if self.lineEdit() is not None:
+            self.lineEdit().setAccessibleName(f"Selected items. {summary}")
 
     # --- Public API for coalescing updates ---
     def beginUpdate(self) -> None:
