@@ -934,6 +934,59 @@ def test_invert_selection_with_limit_respects_capacity(qapp):
     assert len(idxs) == 2
 
 
+# --- Tooltip synchronization for elided text ---
+
+def test_tooltip_mirrors_current_text_when_enabled(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["Alpha", "Beta", "Gamma"]) 
+    c.setCurrentIndexes([0, 2])
+    qapp.processEvents()
+    # By default tooltip sync is enabled; tooltip should equal full currentText
+    assert c.toolTip() == c.currentText()
+
+
+def test_tooltip_stays_full_on_resize_and_elision(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    # Long names to trigger elision easily
+    items = [
+        "Massachusetts",
+        "Rhode Island",
+        "Connecticut",
+        "New Hampshire",
+    ]
+    c.addItems(items)
+    c.setCurrentText(["Massachusetts", "Rhode Island", "Connecticut"])  # by text
+    qapp.processEvents()
+
+    full_text_before = c.currentText()
+    # Make the widget narrow to force elision in the line edit display
+    c.resize(120, c.height())
+    qapp.processEvents()
+
+    # Tooltip should mirror the full (non-elided) text
+    assert c.toolTip() == full_text_before
+    # And currentText remains the full text regardless of elision
+    assert c.currentText() == full_text_before
+
+
+def test_disabling_tooltip_sync_stops_updates(qapp):
+    c = MultiSelectComboBox()
+    c.setDisplayType("text")
+    c.addItems(["A", "B", "C"]) 
+    c.setCurrentIndexes([0, 1])
+    qapp.processEvents()
+    synced_tip = c.toolTip()
+    assert synced_tip == c.currentText()
+
+    # Disable sync and change selection; tooltip should not follow anymore
+    c.setElideToolTipEnabled(False)
+    c.setCurrentIndexes([2])
+    qapp.processEvents()
+    assert c.currentText() == "C"
+    # Tooltip should still be the previous value (or at least not equal currentText)
+    assert c.toolTip() != c.currentText()
 def test_set_current_indexes_respects_limit(qapp):
     c = MultiSelectComboBox()
     c.addItems(["A", "B", "C"])  # 3 items

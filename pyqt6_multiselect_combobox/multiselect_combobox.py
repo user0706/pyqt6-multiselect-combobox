@@ -76,6 +76,10 @@ class MultiSelectComboBox(QComboBox):
         self.setDisplayType("text")
         self.setDisplayDelimiter(",")
 
+        # When True, keep the widget tooltip in sync with the full (non-elided)
+        # selection text so users can hover to view the entire selection.
+        self._elideToolTipEnabled: bool = True
+
         # Connect to current model's signals
         self._connectModelSignals(self.model())
         self.lineEdit().installEventFilter(self)
@@ -176,6 +180,21 @@ class MultiSelectComboBox(QComboBox):
             str: The current display delimiter.
         """
         return self.display_delimiter
+
+    def setElideToolTipEnabled(self, enabled: bool) -> None:
+        """Enable or disable tooltip synchronization with the full selection text.
+
+        When enabled, the widget's tooltip is updated to the full, non-elided
+        joined text built by updateText()/currentText(). This allows users to
+        hover and see the entire selection when the line edit display is elided.
+        """
+        self._elideToolTipEnabled = bool(enabled)
+        # Refresh immediately so current tooltip reflects the new preference
+        self.updateText()
+
+    def isElideToolTipEnabled(self) -> bool:
+        """Return whether tooltip synchronization for elided text is enabled."""
+        return self._elideToolTipEnabled
 
     def resizeEvent(self, event) -> None:
         """Resize event handler.
@@ -506,6 +525,12 @@ class MultiSelectComboBox(QComboBox):
             # Also set native placeholder for better styling when empty
             if not texts:
                 self.lineEdit().setPlaceholderText(self.placeholderText)
+
+            # Keep tooltip synchronized with the full (non-elided) text so users
+            # can hover to see the entire selection when the display is elided.
+            # Mirror currentText(): include placeholder when no selections.
+            if getattr(self, "_elideToolTipEnabled", False):
+                self.setToolTip(text)
 
             metrics = QFontMetrics(self.lineEdit().font())
             elidedText = metrics.elidedText(
