@@ -50,7 +50,16 @@ class MultiSelectComboBox(QComboBox):
         self._outputDataRole: Qt.ItemDataRole = Qt.ItemDataRole.UserRole
 
         self.setEditable(True)
-        self.lineEdit().setReadOnly(True)
+        # Keep the editor editable so the native clear button can function,
+        # but we'll block typing via eventFilter to avoid user text edits.
+        self.lineEdit().setReadOnly(False)
+        # Surface a clear affordance on the read-only line edit; clicking the
+        # native clear button should clear the selection, not only the text.
+        try:
+            self.lineEdit().setClearButtonEnabled(True)
+        except Exception:
+            # Fallback for environments/styles that might not support it
+            pass
 
         palette = self.lineEdit().palette()
         palette.setBrush(
@@ -86,6 +95,14 @@ class MultiSelectComboBox(QComboBox):
 
         # Set initial accessible names for screen readers
         self._updateAccessibilityLabels()
+
+        # If the user clicks the clear button, QLineEdit clears its text.
+        # Detect that user action via textChanged when not in a programmatic
+        # update and clear the selection once.
+        try:
+            self.lineEdit().textChanged.connect(self._onLineEditTextChanged)
+        except Exception:
+            pass
 
     def setOutputType(self, output_type: str) -> None:
         """Set the output type for the combo box.
@@ -235,6 +252,11 @@ class MultiSelectComboBox(QComboBox):
                 self.hidePopup()
             else:
                 self.showPopup()
+            return True
+        # Block keyboard edits in the line edit while allowing the clear button
+        # to function (the clear button triggers a textChanged("") we handle).
+        if obj == self.lineEdit() and event.type() == QEvent.Type.KeyPress:
+            # Eat key presses to prevent manual typing into the line edit
             return True
         # Keep filter UI positioned on view resize/move
         if self._filterEnabled and obj in (self.view(), self.view().viewport()):
@@ -748,6 +770,13 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._endBulkUpdate()
 
+    # Public clear() slot for better API discoverability and to integrate with
+    # the line edit clear button UX. This clears the selection and lets the
+    # coalesced update emit selectionChanged once.
+    def clear(self) -> None:  # type: ignore[override]
+        """Clear the current selection and update the display once."""
+        self.clearSelection()
+
     def invertSelection(self) -> None:
         """Invert the selection state of all items.
 
@@ -958,6 +987,22 @@ class MultiSelectComboBox(QComboBox):
         self._updateAccessibilityLabels()
         # Update ARIA-like hints in tooltips/status tips for all rows
         self._updateAriaLikeHints()
+
+    # --- Internal handlers ---
+    def _onLineEditTextChanged(self, text: str) -> None:
+        """Handle user-initiated text clears from the line edit's clear button.
+
+        The line edit is read-only and reflects selection. If the user clicks
+        the clear button, QLineEdit clears its text and emits textChanged("").
+        We treat that as intent to clear selection. Programmatic updates to the
+        text are guarded by _updatingText and blockSignals, so we won't react
+        to our own updates here.
+        """
+        if self._updatingText:
+            return
+        if text == "":
+            # Clear once; clearSelection() will schedule a single emit.
+            self.clear()
 
     def _updateAccessibilityLabels(self) -> None:
         """Update accessible names for the combo box and line edit.

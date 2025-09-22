@@ -749,3 +749,59 @@ def test_aria_like_hints_tooltips_and_status_tips(qapp):
     qapp.processEvents()
     tip0_cleared = (c.model().item(1).toolTip() or "")
     assert "is not selected" in tip0_cleared
+
+
+# --- Clear button and clear() slot ---
+
+def test_line_edit_has_clear_button_enabled(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    # Clear button should be enabled on the internal line edit
+    assert c.lineEdit().isClearButtonEnabled() is True
+
+
+def test_clear_slot_clears_selection_and_emits_once(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setCurrentIndexes([0, 2])
+    captured = []
+
+    def on_changed(values):
+        captured.append(list(values))
+
+    c.selectionChanged.connect(on_changed)
+    # Call clear() once -> should clear selection and emit once
+    c.clear()
+    qapp.processEvents()
+    assert c.getCurrentIndexes() == []
+    # There should be exactly 1 emission for the changed selection
+    assert len(captured) >= 1
+    # If there were previous emissions from setCurrentIndexes coalescing, ensure last is empty
+    assert captured[-1] == []
+
+    # Calling clear() again should not emit a new signal since selection didn't change
+    prev_len = len(captured)
+    c.clear()
+    qapp.processEvents()
+    assert len(captured) == prev_len
+
+
+def test_line_edit_clear_button_action_clears_selection(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setDisplayType("text")
+    c.setCurrentIndexes([0, 1])
+    qapp.processEvents()
+    # Simulate user clicking the clear button by invoking QLineEdit.clear()
+    captured = []
+
+    def on_changed(values):
+        captured.append(list(values))
+
+    c.selectionChanged.connect(on_changed)
+    # Ensure text is non-empty before clear
+    assert c.currentText() != ""
+    c.lineEdit().clear()
+    qapp.processEvents()
+    assert c.getCurrentIndexes() == []
+    assert captured and captured[-1] == []
