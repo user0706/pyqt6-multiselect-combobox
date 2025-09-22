@@ -311,6 +311,12 @@ class MultiSelectComboBox(QComboBox):
                             self.clearSelection()
                     else:
                         item = self.model().itemFromIndex(index)
+                        # Respect disabled rows: do not toggle via keyboard
+                        try:
+                            if not bool(item.flags() & Qt.ItemFlag.ItemIsEnabled):
+                                return True
+                        except Exception:
+                            pass
                         state = item.data(Qt.ItemDataRole.CheckStateRole)
                         new_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
                         if new_state == Qt.CheckState.Checked and not self._canSelectMore(1):
@@ -344,6 +350,12 @@ class MultiSelectComboBox(QComboBox):
                 return True
             else:
                 item = self.model().itemFromIndex(index)
+                # Respect disabled rows: do not toggle via mouse
+                try:
+                    if not bool(item.flags() & Qt.ItemFlag.ItemIsEnabled):
+                        return True
+                except Exception:
+                    pass
                 state = item.data(Qt.ItemDataRole.CheckStateRole)
                 new_state = Qt.CheckState.Unchecked if state == Qt.CheckState.Checked else Qt.CheckState.Checked
                 if new_state == Qt.CheckState.Checked and not self._canSelectMore(1):
@@ -565,12 +577,15 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._updatingText = False
 
-    def addItem(self, text: str, data: Optional[Any] = None) -> None:
+    def addItem(self, text: str, data: Optional[Any] = None, *, enabled: bool = True) -> None:
         """Add an item to the combo box.
 
         Args:
             text (str): The text to display.
             data (Optional[Any]): The associated data. Default is None.
+            enabled (bool): Whether the item should be enabled (selectable via user
+                interaction). Disabled items remain visible but cannot be toggled by
+                the user. Programmatic changes are still possible. Default True.
         """
         # Enforce duplicates policy: when disabled, prevent adding an item
         # that duplicates by text OR by data (strictest interpretation).
@@ -588,9 +603,12 @@ class MultiSelectComboBox(QComboBox):
         # backward compatibility with item.data() and to align with Qt idioms.
         item.setData(data or text)  # default role (matches previous behavior)
         item.setData(data or text, int(Qt.ItemDataRole.UserRole))
-        item.setFlags(
-            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
-        )
+        # Build flags respecting the requested enabled state, always ensuring
+        # user-checkable/selectable so they appear and can be controlled when enabled
+        flags = Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
+        if enabled:
+            flags |= Qt.ItemFlag.ItemIsEnabled
+        item.setFlags(flags)
         item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
         self.model().appendRow(item)
         self._syncSelectAllState()
@@ -876,6 +894,70 @@ class MultiSelectComboBox(QComboBox):
         finally:
             self._endBulkUpdate()
 
+    def setCurrentDataValues(self, values: List[Any]) -> None:
+        """Select items whose data matches any of the provided values.
+
+        This API avoids delimiter parsing and matches strictly by item data
+        stored at Qt.UserRole (the role used by addItem/addItems).
+
+        Args:
+            values (list[Any]): Data values to select.
+
+        Returns:
+            None
+        """
+        try:
+            to_select = set(values)
+        except Exception:
+            # Fallback to list iteration if values is not hashable as a set
+            to_select = list(values)  # type: ignore[assignment]
+
+        self._beginBulkUpdate()
+        try:
+            for i in range(self._firstOptionRow(), self.model().rowCount()):
+                item = self.model().item(i)
+                data_val = item.data(int(Qt.ItemDataRole.UserRole))
+                match = (data_val in to_select) if isinstance(to_select, set) else (data_val in to_select)
+                if match:
+                    if self._canSelectMore(1):
+                        item.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+                    else:
+                        self._notifyLimitReached()
+                        item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+                else:
+                    item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        finally:
+            self._endBulkUpdate()
+
+    def setCurrentTexts(self, texts: List[str]) -> None:
+        """Select items whose text matches any of the provided strings.
+
+        This API avoids delimiter parsing and matches strictly by item text.
+
+        Args:
+            texts (list[str]): Item texts to select. Matching is exact and
+                case-sensitive (use your own normalization if needed).
+
+        Returns:
+            None
+        """
+        to_select = set(texts)
+        self._beginBulkUpdate()
+        try:
+            for i in range(self._firstOptionRow(), self.model().rowCount()):
+                item = self.model().item(i)
+                match = item.text() in to_select
+                if match:
+                    if self._canSelectMore(1):
+                        item.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+                    else:
+                        self._notifyLimitReached()
+                        item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+                else:
+                    item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        finally:
+            self._endBulkUpdate()
+
     def findText(self, text: str, flags: Qt.MatchFlag = Qt.MatchFlag.MatchExactly) -> int:  # type: ignore[override]
         """Find the index of the first item whose text matches.
 
@@ -948,6 +1030,49 @@ class MultiSelectComboBox(QComboBox):
         try:
             for i in range(self._firstOptionRow(), self.model().rowCount()):
                 self.model().item(i).setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        finally:
+            self._endBulkUpdate()
+
+    def removeItem(self, index: int) -> None:  # type: ignore[override]
+        """Remove a single item by its model index.
+
+        This respects the optional "Select All" pseudo-item and will not remove it.
+        Indices follow the underlying model (i.e., include the "Select All" row when enabled).
+        """
+        m = self.model()
+        if index < 0 or index >= m.rowCount():
+            return
+        # Do not remove the Select All pseudo-item
+        if self._selectAllEnabled and index == 0 and m.item(0) is not None and m.item(0).data() == "__select_all__":
+            return
+        self._beginBulkUpdate()
+        try:
+            m.removeRow(index)
+        finally:
+            self._endBulkUpdate()
+
+    def removeItems(self, indexes: Iterable[int]) -> None:
+        """Remove multiple items by their model indices in a single batch.
+
+        - Indices should refer to the underlying model (they include the optional
+          "Select All" row when enabled).
+        - The optional "Select All" pseudo-item is never removed.
+        - Removals are performed in descending index order to avoid shifting.
+        """
+        m = self.model()
+        if not indexes:
+            return
+        # Normalize and filter invalid indices; skip Select All pseudo-row if present
+        first_option = self._firstOptionRow()
+        unique = sorted({i for i in indexes if 0 <= i < m.rowCount()}, reverse=True)
+        if self._selectAllEnabled and m.rowCount() > 0 and m.item(0) is not None and m.item(0).data() == "__select_all__":
+            unique = [i for i in unique if i >= first_option]
+        if not unique:
+            return
+        self._beginBulkUpdate()
+        try:
+            for i in unique:
+                m.removeRow(i)
         finally:
             self._endBulkUpdate()
 

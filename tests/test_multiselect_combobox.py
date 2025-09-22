@@ -1193,3 +1193,150 @@ def test_close_on_select_mouse_select_all_row_hides_popup_and_view(qapp):
     qapp.processEvents()
     assert not c.view().isVisible()
     assert not c.view().viewport().isVisible()
+
+
+# --- Disabled items support ---
+
+def test_add_item_disabled_sets_flags(qapp):
+    c = MultiSelectComboBox()
+    c.addItem("A", enabled=True)
+    c.addItem("B", enabled=False)
+    flags_a = c.model().item(0).flags()
+    flags_b = c.model().item(1).flags()
+    assert bool(flags_a & Qt.ItemFlag.ItemIsEnabled)
+    assert not bool(flags_b & Qt.ItemFlag.ItemIsEnabled)
+    # Both should still be selectable/user-checkable (for consistency/UI display)
+    assert bool(flags_a & Qt.ItemFlag.ItemIsSelectable)
+    assert bool(flags_b & Qt.ItemFlag.ItemIsSelectable)
+
+
+def test_mouse_click_does_not_toggle_disabled_item(qapp):
+    c = MultiSelectComboBox()
+    c.addItem("Enabled", enabled=True)
+    c.addItem("Disabled", enabled=False)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Click disabled row (index 1)
+    idx = c.model().index(1, 0)
+    rect = c.view().visualRect(idx)
+    pos = rect.center()
+    from PyQt6.QtTest import QTest
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos)
+    # Disabled row should not become selected
+    assert c.getCurrentIndexes() == []
+    c.hidePopup()
+
+
+def test_keyboard_toggle_ignored_for_disabled_item(qapp):
+    from PyQt6.QtTest import QTest
+    c = MultiSelectComboBox()
+    c.addItem("Enabled", enabled=True)
+    c.addItem("Disabled", enabled=False)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Attempt to toggle disabled row via Space/Enter
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    QTest.keyClick(c.view(), Qt.Key.Key_Return)
+    assert c.getCurrentIndexes() == []
+    c.hidePopup()
+
+
+def test_programmatic_selection_can_include_disabled(qapp):
+    c = MultiSelectComboBox()
+    c.addItem("Enabled", enabled=True)
+    c.addItem("Disabled", enabled=False)
+    # Programmatically set selection -> disabled item should be checked
+    c.setCurrentIndexes([1])
+    assert c.getCurrentIndexes() == [1]
+
+
+# --- New explicit selection APIs: setCurrentTexts / setCurrentDataValues ---
+
+def test_set_current_texts_and_data_values_basic(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"], ["da", "db", "dc"])
+    # By texts
+    c.setCurrentTexts(["A", "C"])
+    assert c.getCurrentIndexes() == [0, 2]
+    # By data
+    c.clearSelection()
+    c.setCurrentDataValues(["db"])  # matches B
+    assert c.getCurrentIndexes() == [1]
+
+
+def test_set_current_texts_respects_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 items
+    c.setMaxSelectionCount(2)
+    c.setCurrentTexts(["A", "B", "C"])  # ask for 3
+    assert len(c.getCurrentIndexes()) == 2
+
+
+def test_set_current_data_values_respects_limit(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"], ["da", "db", "dc"])  # 3 items
+    c.setMaxSelectionCount(1)
+    c.setCurrentDataValues(["da", "db"])  # ask for 2
+    assert len(c.getCurrentIndexes()) == 1
+
+
+# --- Removal helpers: removeItem / removeItems ---
+
+def test_remove_item_updates_selection_and_cache(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # rows: 0..2
+    # Select middle item, then remove it
+    c.setCurrentIndexes([1])
+    captured = []
+
+    def on_changed(values):
+        captured.append(list(values))
+
+    c.selectionChanged.connect(on_changed)
+    # Remove selected row
+    c.removeItem(1)
+    qapp.processEvents()
+    # Row count shrinks and selection should now be empty
+    assert c.model().rowCount() == 2
+    assert c.getCurrentIndexes() == []
+    # Ensure a signal was emitted reflecting the cleared selection
+    assert captured and captured[-1] == []
+
+
+def test_remove_items_bulk_and_select_all_resync(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"])  # 3 options
+    c.setSelectAllEnabled(True)
+    # Select all options
+    c.selectAll()
+    # Remove first and last option rows (indices relative to model with SA at 0)
+    # Option indices are 1,2,3 -> remove 1 and 3
+    c.removeItems([1, 3])
+    qapp.processEvents()
+    # Only one option remains and should be selected
+    assert c.model().rowCount() == 2  # SA + 1 option
+    assert c.getCurrentIndexes() == [1]
+    # With a single remaining option selected, Select All should be fully checked
+    sa = c.model().item(0)
+    assert sa is not None
+    assert sa.data() == "__select_all__"
+    assert sa.checkState() == Qt.CheckState.Checked
+
+
+def test_remove_item_does_not_remove_select_all_row(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setSelectAllEnabled(True)
+    # Attempt to remove index 0 (Select All) -> should be ignored
+    before = c.model().rowCount()
+    c.removeItem(0)
+    qapp.processEvents()
+    assert c.model().rowCount() == before
+    assert c.model().item(0).data() == "__select_all__"
