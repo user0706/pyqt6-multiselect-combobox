@@ -1066,3 +1066,69 @@ def test_external_over_selection_is_enforced(qapp):
     qapp.processEvents()
     # The widget should prune back down to 2 selections
     assert len(c.getCurrentIndexes()) == 2
+
+
+def test_close_on_select_mouse_item_hides_popup_and_view(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setCloseOnSelect(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+
+    # Click row 0 (first option) to toggle and close
+    idx0 = c.model().index(0, 0)
+    rect0 = c.view().visualRect(idx0)
+    pos0 = rect0.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos0)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+    # Also ensure viewport is hidden as _forceHidePopupView is used
+    assert not c.view().viewport().isVisible()
+
+
+def test_show_popup_reopens_immediately_after_close_on_select(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setCloseOnSelect(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+
+    # Click an item to close
+    idx0 = c.model().index(0, 0)
+    rect0 = c.view().visualRect(idx0)
+    pos0 = rect0.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos0)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+
+    # Immediately request to show again; view should become visible without lag
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+
+
+def test_close_on_select_mouse_select_all_row_hides_popup_and_view(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B", "C"]) 
+    c.setSelectAllEnabled(True)
+    c.setCloseOnSelect(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+    assert c.view().isVisible()
+
+    # Click Select All row (0) to toggle and close
+    idx_sa = c.model().index(0, 0)
+    rect_sa = c.view().visualRect(idx_sa)
+    pos_sa = rect_sa.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos_sa)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+    assert not c.view().viewport().isVisible()

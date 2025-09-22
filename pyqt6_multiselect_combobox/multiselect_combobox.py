@@ -345,6 +345,7 @@ class MultiSelectComboBox(QComboBox):
                 self._emitSelectionIfChanged()
                 if self._closeOnSelect:
                     self.hidePopup()
+                    self._forceHidePopupView()
                 return True
         return False
 
@@ -455,6 +456,15 @@ class MultiSelectComboBox(QComboBox):
             self._ensureFilterUi()
             self._positionFilterUi()
         super().showPopup()
+        # In case the view/viewport were force-hidden during a previous close,
+        # explicitly re-show them to avoid a perceived lag or invisible popup.
+        try:
+            v = self.view()
+            v.show()
+            if v.viewport() is not None:
+                v.viewport().show()
+        except Exception:
+            pass
         self.closeOnLineEditClick = True
 
     def hidePopup(self) -> None:
