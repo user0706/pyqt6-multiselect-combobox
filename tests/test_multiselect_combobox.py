@@ -1385,3 +1385,69 @@ def test_view_virtualization_setters(qapp):
     assert c.getViewBatchSize() == 512
     assert v.layoutMode() == QListView.LayoutMode.Batched
     assert v.batchSize() == 512
+
+# --- Coalescing (lazy update) controls ---
+def test_is_update_coalesced_flag_transitions(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    # Ensure coalescing is enabled (default)
+    assert c.isCoalescingEnabled() is True
+    # Adding items emits rowsInserted -> a coalesced update is scheduled
+    assert c.isUpdateCoalesced() is True
+    qapp.processEvents()
+    # Allow QTimer.singleShot(0, ...) to fire
+    from PyQt6.QtTest import QTest
+    QTest.qWait(1)
+    qapp.processEvents()
+    assert c.isUpdateCoalesced() is False
+    # Change a check state directly to trigger _onModelDataChanged -> _scheduleCoalescedUpdate
+    c.model().item(0).setCheckState(Qt.CheckState.Checked)
+    # With coalescing on, there should be a pending update until events are processed
+    assert c.isUpdateCoalesced() is True
+    qapp.processEvents()
+    # Allow queued singleShot to run and flush
+    QTest.qWait(1)
+    qapp.processEvents()
+    assert c.isUpdateCoalesced() is False
+
+def test_disable_coalescing_performs_immediate_update(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    # Disable lazy updates
+    c.setCoalescingEnabled(False)
+    assert c.isCoalescingEnabled() is False
+    # Changing a model item should immediately refresh without scheduling
+    captured = []
+
+    def on_changed(values):
+        captured.append(list(values))
+
+    c.selectionChanged.connect(on_changed)
+    c.model().item(0).setCheckState(Qt.CheckState.Checked)
+    # No coalesced update should be pending
+    assert c.isUpdateCoalesced() is False
+    # Since updates are immediate, we should already have the new selection and emission
+    assert c.getCurrentIndexes() == [0]
+    # Signal should be emitted without requiring event loop flush
+    assert captured and captured[-1] == [c.currentData()[0]]
+
+def test_disabling_coalescing_flushes_pending_update(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    # Ensure coalescing enabled; schedule an update
+    c.setCoalescingEnabled(True)
+    captured = []
+
+    def on_changed(values):
+        captured.append(list(values))
+
+    c.selectionChanged.connect(on_changed)
+    c.model().item(0).setCheckState(Qt.CheckState.Checked)
+    assert c.isUpdateCoalesced() is True
+    # Now disable coalescing; this should flush the pending update immediately
+    c.setCoalescingEnabled(False)
+    assert c.isCoalescingEnabled() is False
+    assert c.isUpdateCoalesced() is False
+    # Selection should have applied and signal emitted without needing processEvents
+    assert c.getCurrentIndexes() == [0]
+    assert captured and captured[-1] == [c.currentData()[0]]
