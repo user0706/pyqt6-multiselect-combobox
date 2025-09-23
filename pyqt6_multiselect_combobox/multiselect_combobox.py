@@ -377,9 +377,12 @@ class MultiSelectComboBox(QComboBox):
                         # Close the QComboBox popup and ensure the view is hidden
                         self.hidePopup()
                         self._forceHidePopupView()
-                        # Restore focus to the combo for smooth keyboard flow
+                        # Restore focus to the combo for smooth keyboard flow.
+                        # Do this on the next event loop tick so that any focus
+                        # changes triggered by hidePopup on certain platforms
+                        # (e.g., macOS offscreen plugin) don't override it.
                         try:
-                            self.setFocus(Qt.FocusReason.PopupFocusReason)
+                            QTimer.singleShot(0, lambda: self.setFocus(Qt.FocusReason.PopupFocusReason))
                         except Exception:
                             pass
                     return True
@@ -400,6 +403,11 @@ class MultiSelectComboBox(QComboBox):
                     # Close the QComboBox popup and ensure the view is hidden
                     self.hidePopup()
                     self._forceHidePopupView()
+                    # Schedule focus restoration to the combo itself (deferred)
+                    try:
+                        QTimer.singleShot(0, lambda: self.setFocus(Qt.FocusReason.PopupFocusReason))
+                    except Exception:
+                        pass
                 return True
             else:
                 item = self.model().itemFromIndex(index)
@@ -421,9 +429,9 @@ class MultiSelectComboBox(QComboBox):
                 if self._closeOnSelect:
                     self.hidePopup()
                     self._forceHidePopupView()
-                    # Restore focus to the combo after closing
+                    # Restore focus to the combo after closing (deferred)
                     try:
-                        self.setFocus(Qt.FocusReason.PopupFocusReason)
+                        QTimer.singleShot(0, lambda: self.setFocus(Qt.FocusReason.PopupFocusReason))
                     except Exception:
                         pass
                 return True

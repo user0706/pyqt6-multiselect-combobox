@@ -539,6 +539,29 @@ def test_keyboard_space_enter_toggle(qapp):
     assert [i for i in range(1, c.model().rowCount())] == c.getCurrentIndexes()
 
 
+def test_esc_closes_popup_without_selection_toggles(qapp):
+    c = MultiSelectComboBox()
+    # Keep it simple: no Select All to avoid pseudo-row index shifts
+    c.setSelectAllEnabled(False)
+    c.addItems(["A", "B", "C"])
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Highlight a row to simulate user navigation, but do not toggle anything
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    qapp.processEvents()
+    before = c.getCurrentIndexes()
+
+    # Press Esc on the popup view: should close the popup and not change selection
+    QTest.keyClick(c.view(), Qt.Key.Key_Escape)
+    qapp.processEvents()
+
+    assert not c.view().isVisible()
+    assert c.getCurrentIndexes() == before
+
+
 def test_close_on_select_behavior(qapp):
     c = MultiSelectComboBox()
     c.addItems(["A", "B"]) 
