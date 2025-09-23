@@ -397,6 +397,76 @@ def test_line_edit_click_toggles_popup(qapp):
     QTest.qWait(150)
     qapp.processEvents()
     assert not c.view().isVisible()
+
+
+def test_navigation_keys_forwarded_from_line_edit(qapp):
+    c = MultiSelectComboBox()
+    # Do not enable Select All to make index expectations straightforward
+    c.setSelectAllEnabled(False)
+    c.addItems(["A", "B", "C"]) 
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Start from middle row
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    qapp.processEvents()
+    assert c.view().currentIndex().row() == 1
+
+    # Press End on the line edit -> should move to last row (2)
+    QTest.keyClick(c.lineEdit(), Qt.Key.Key_End)
+    qapp.processEvents()
+    assert c.view().currentIndex().row() == 2
+
+    # Press Home -> should move to first row (0)
+    QTest.keyClick(c.lineEdit(), Qt.Key.Key_Home)
+    qapp.processEvents()
+    assert c.view().currentIndex().row() == 0
+
+    # PageDown from top -> with only 3 rows, expect it to land at last row
+    QTest.keyClick(c.lineEdit(), Qt.Key.Key_PageDown)
+    qapp.processEvents()
+    assert c.view().currentIndex().row() == 2
+
+    # PageUp from bottom -> expect to land at first row
+    QTest.keyClick(c.lineEdit(), Qt.Key.Key_PageUp)
+    qapp.processEvents()
+    assert c.view().currentIndex().row() == 0
+
+    c.hidePopup()
+
+
+def test_focus_returns_after_close_on_select(qapp):
+    c = MultiSelectComboBox()
+    c.addItems(["A", "B"]) 
+    c.setSelectAllEnabled(True)
+    c.setCloseOnSelect(True)
+    c.show()
+    qapp.processEvents()
+    c.showPopup()
+    qapp.processEvents()
+
+    # Keyboard toggle should close and focus the combo
+    c.view().setCurrentIndex(c.model().index(1, 0))
+    QTest.keyClick(c.view(), Qt.Key.Key_Space)
+    QTest.qWait(50)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+    # Focus should be on the combo (not on the view)
+    assert c.hasFocus() is True
+
+    # Re-open and test mouse click path as well
+    c.showPopup()
+    qapp.processEvents()
+    idx_opt1 = c.model().index(1, 0)
+    rect1 = c.view().visualRect(idx_opt1)
+    pos1 = rect1.center()
+    QTest.mouseClick(c.view().viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, pos1)
+    QTest.qWait(50)
+    qapp.processEvents()
+    assert not c.view().isVisible()
+    assert c.hasFocus() is True
     qapp.processEvents()
 
 

@@ -1,8 +1,8 @@
 from typing import Any, Iterable, List, Optional, Tuple
 
 from PyQt6.QtWidgets import QComboBox, QStyledItemDelegate, QLineEdit, QToolTip, QListView
-from PyQt6.QtGui import QStandardItem, QPalette, QFontMetrics, QCursor
-from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QObject, QTimerEvent, QTimer
+from PyQt6.QtGui import QStandardItem, QPalette, QFontMetrics, QCursor, QKeyEvent
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QObject, QTimerEvent, QTimer, QCoreApplication
 
 
 class MultiSelectComboBox(QComboBox):
@@ -313,7 +313,31 @@ class MultiSelectComboBox(QComboBox):
         # Block keyboard edits in the line edit while allowing the clear button
         # to function (the clear button triggers a textChanged("") we handle).
         if obj == self.lineEdit() and event.type() == QEvent.Type.KeyPress:
-            # Eat key presses to prevent manual typing into the line edit
+            # When the popup is open, allow navigation keys in the line edit to
+            # control the popup view (Home/End/PageUp/PageDown). Forward them to
+            # the view so the default QListView navigation applies.
+            try:
+                key = event.key()  # type: ignore[attr-defined]
+            except Exception:
+                key = None
+            if self.view().isVisible() and key in (
+                Qt.Key.Key_Home,
+                Qt.Key.Key_End,
+                Qt.Key.Key_PageUp,
+                Qt.Key.Key_PageDown,
+            ):
+                try:
+                    forwarded = QKeyEvent(
+                        QEvent.Type.KeyPress,
+                        key,  # type: ignore[arg-type]
+                        event.modifiers() if hasattr(event, "modifiers") else Qt.KeyboardModifier.NoModifier,
+                    )
+                    QCoreApplication.sendEvent(self.view(), forwarded)
+                    return True
+                except Exception:
+                    # Fall through to eat the key if forwarding fails
+                    return True
+            # Eat other key presses to prevent manual typing into the line edit
             return True
         # Keep filter UI positioned on view resize/move
         if self._filterEnabled and obj in (self.view(), self.view().viewport()):
@@ -353,6 +377,11 @@ class MultiSelectComboBox(QComboBox):
                         # Close the QComboBox popup and ensure the view is hidden
                         self.hidePopup()
                         self._forceHidePopupView()
+                        # Restore focus to the combo for smooth keyboard flow
+                        try:
+                            self.setFocus(Qt.FocusReason.PopupFocusReason)
+                        except Exception:
+                            pass
                     return True
         if obj == self.view().viewport() and event.type() == QEvent.Type.MouseButtonRelease:
             index = self.view().indexAt(event.position().toPoint())
@@ -392,6 +421,11 @@ class MultiSelectComboBox(QComboBox):
                 if self._closeOnSelect:
                     self.hidePopup()
                     self._forceHidePopupView()
+                    # Restore focus to the combo after closing
+                    try:
+                        self.setFocus(Qt.FocusReason.PopupFocusReason)
+                    except Exception:
+                        pass
                 return True
         return False
 
